@@ -1,0 +1,148 @@
+{
+  "theme": "dark",
+  "archetype": "The Performance Pro (Elite Athleticism & Precision) + Swiss Grid",
+  "context": "DASHBOARDS & ADMIN PANELS (Analytics, Admin, Data-Heavy)",
+  "design_concepts_considered": [
+    {
+      "name": "Tactical Night (Selected)",
+      "probability": "75%",
+      "description": "Dark mode, zinc background, high-contrast Volt Green accents. Optimized for data-heavy sports dashboard (Archetype 2)."
+    },
+    {
+      "name": "Swiss Brutalist Turf",
+      "probability": "15%",
+      "description": "Stark white backgrounds, massive typography, monochrome data tables with piercing grass green alerts."
+    },
+    {
+      "name": "Retro Manager 98",
+      "probability": "5%",
+      "description": "Terminal look with monospace fonts, scanlines, data-driven nostalgia."
+    },
+    {
+      "name": "Olympic Premium",
+      "probability": "3%",
+      "description": "Luxury archetype, deep navy blues, gold accents, Serif fonts."
+    },
+    {
+      "name": "Pastel Playfield",
+      "probability": "2%",
+      "description": "Soft pastels and neobrutalist borders."
+    }
+  ],
+  "typography": {
+    "headings": {
+      "fontFamily": "'Barlow Condensed', 'Oswald', sans-serif",
+      "style": "uppercase, tracking-tighter, font-black or font-bold",
+      "rules": "NEVER use Inter for headings. Use these condensed, heavy fonts to evoke athletic performance."
+    },
+    "body": {
+      "fontFamily": "'Manrope', 'IBM Plex Sans', sans-serif",
+      "style": "Clean geometric sans, leading-relaxed",
+      "rules": "Use for all data tables, inputs, and dense information."
+    },
+    "hierarchy_gap_rule": "The jump between a heading and its subheading must not exceed 2 Tailwind steps. H1 max text-5xl.",
+    "typesetting": "Tight line height (leading-none) for headers. Overlines/labels must be Uppercase + Tiny + Wide Spacing (tracking-[0.2em])."
+  },
+  "colors": {
+    "backgrounds": {
+      "app": "bg-zinc-950",
+      "surface": "bg-zinc-900",
+      "card": "bg-zinc-900/50",
+      "rules": "Tinted grey rule: Never use pure #000000. zinc-950 provides a deep, tactical athletic feel."
+    },
+    "accents": {
+      "primary": "bg-lime-400",
+      "primary_text": "text-lime-400",
+      "primary_hover": "hover:bg-lime-500",
+      "destructive": "bg-red-500 text-white",
+      "conflict_bg": "bg-red-500/10",
+      "conflict_border": "border-red-500/50"
+    },
+    "text": {
+      "primary": "text-zinc-50",
+      "secondary": "text-zinc-400",
+      "muted": "text-zinc-500"
+    },
+    "borders": "border-zinc-800"
+  },
+  "layouts": {
+    "strategy": "High Density Grid (For Dashboards / Analytics). Base Grid: grid-cols-1 md:grid-cols-3 lg:grid-cols-4. Tight gaps (gap-4 or gap-6).",
+    "bento_rules": "Every pixel must be utilized. Use h-full on children to stretch to match neighbors. No jagged bottoms.",
+    "spacing": "Generous Spacing Philosophy. Containers with borders must have internal padding (p-6 or p-8) to prevent text collision."
+  },
+  "surfaces_and_micro_themes": {
+    "global_style": "Grid Borders (The 'Technical' Look). Expose the skeleton. Container uses border-collapse style layout. Items have subtle borders (border-border/40). NO soft shadows.",
+    "cards": "Flat background, 1px subtle border, no shadow. On hover: slight lift (-translate-y-1), border color brightens (border-lime-400/50).",
+    "headers": "Solid Background with a hard bottom border. Never use fully transparent header over hero images.",
+    "forms": "Complex tournament setups need flat solid surfaces. Glassmorphism is FORBIDDEN for the scheduling/conflict data to prevent visual refraction of data."
+  },
+  "components": {
+    "buttons": "Sharp, tactical. rounded-none or rounded-sm. Primary buttons use bg-lime-400 text-black font-bold uppercase tracking-wider.",
+    "tables": "Shadcn table components. Dense styling. Header rows text-xs uppercase tracking-widest text-zinc-500.",
+    "forms_inputs": "Use Shadcn Input, Select, Form, Checkbox heavily customized in .js format. Never native inputs. Focus states MUST have higher contrast: focus:border-lime-400 focus:ring-1 focus:ring-lime-400.",
+    "brackets_knockouts": "Custom flex/grid based layouts for bracket trees with crisp 1px solid lines (border-zinc-700) connecting nodes. Winner nodes highlighted with lime-400 text."
+  },
+  "visual_enhancers": {
+    "textures": "Subtle grain/noise overlay to kill digital flatness on main wrapper backgrounds.",
+    "lines": "1px solid strokes to separate all zones. Tactical Minimalism.",
+    "empty_states": "Use the provided heavily-darkened stadium/pitch images as a backdrop for 'No tournaments found' or 'No matches scheduled'."
+  },
+  "motion": {
+    "rules": "Minimalist micro-interactions for feedback. Entrance animations staggered for lists (framer-motion).",
+    "hover_states": "ALWAYS explicitly set text color on hover (e.g., hover:bg-zinc-800 hover:text-lime-400)."
+  },
+  "accessibility": {
+    "contrast": "Minimum 4.5:1 for normal text. When placing text over images, use bg-black/60 overlay minimum.",
+    "focus": "Focus states must be visible. focus:ring-1 focus:ring-lime-400 focus:outline-none.",
+    "data_testid": "CRITICAL: All interactive and key informational elements MUST include a data-testid attribute (kebab-case, role-based)."
+  },
+  "media": {
+    "image_urls": {
+      "hero_stadium": {
+        "url": "https://images.unsplash.com/photo-1676746424139-77f8bd8922a8",
+        "category": "Hero / Dashboard Background",
+        "description": "Football stadium at night with lights on. Must be used with heavy overlay (e.g., bg-zinc-950/80) so it's barely visible, providing texture without distraction."
+      },
+      "pitch_texture": {
+        "url": "https://images.unsplash.com/photo-1517747614396-d21a78b850e8",
+        "category": "Empty States / Cards",
+        "description": "Bird's-eye view of a green soccer field. Use in 'Create Tournament' empty states with grayscale filter."
+      },
+      "referee_silhouette": {
+        "url": "https://images.unsplash.com/photo-1650501889621-e3ac406b41a9",
+        "category": "Referees / Personnel",
+        "description": "Silhouette of soccer figures. Use for Referee/Coach empty states."
+      }
+    },
+    "rules": "Preserve main subjects. Never use placeholder images. All background images must have an overlay of at least bg-black/50."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "instructions": "Standard installation. Use crisp, geometric icons. Avoid overly playful/rounded icons."
+  },
+  "instructions_to_main_agent": [
+    "You MUST use Tailwind CSS and raw HTML (div, span) for structure, and Shadcn/UI for logic components (Select, Dialog, Tabs).",
+    "TournamentOS is a data-heavy SaaS. Use the High Density Grid (Mode B) from bento guidelines.",
+    "Smart scheduling conflict warnings must be highly visible (e.g., bg-red-500/10 border-red-500).",
+    "Design the Knockout Bracket visually using flex/grid structures, not tables.",
+    "Install and use 'sonner' for toast notifications (import from src/components/ui/sonner.js).",
+    "All components are .js files, NOT .tsx. Generate and customize Shadcn components in JS.",
+    "Avoid the 'Default Vercel' look. Apply the 'Grid Borders' tactical look.",
+    "Do NOT use HTML <select> or <input type='date'>. Use Shadcn components.",
+    "Ensure all Grid children are direct descendants.",
+    "Include 'data-testid' on every form submission, tab, dialog trigger, and card action."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms.",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style.",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories = main agent will use placeholder text which is FORBIDDEN.",
+    "All components are in .js formats. Do not use TypeScript (.tsx)."
+  ]
+}

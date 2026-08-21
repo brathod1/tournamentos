@@ -1,0 +1,25 @@
+{
+  "summary": "Backend-only testing of the rewritten Scheduling Engine. Wrote /app/backend/tests/test_scheduling_engine.py with 10 pytest cases covering every requested invariant. All 10 passed against the live public backend URL. Verified: (1) POST /api/tournaments/{tid}/auto-schedule returns {scheduled, unscheduled, conflicts, suggestions, categories} and GET /api/tournaments/{tid}/schedule populates date/time/ground_id on placed matches; (2) NO ground double-booking (checked overlap of [start, start+duration) on same (date, ground_id) across categories); (3) NO team overlap on same date; (4) min_rest_minutes respected between a team's back-to-back matches; (5) fixtures (home_id/away_id/round/order) are unchanged by scheduling; (6) locked match with date/time/ground is preserved across a re-run and other matches don't clash into it; (7) knockout progression — later rounds start after their feeders finish (Final >= max(SF end)); (8) infeasibility on a deliberately impossible single-day/6-team category returns 200 with unscheduled>0, a 'capacity' conflict, per-match 'unplaced_match' diagnostics and non-empty suggestions (no 500); (9) POST /api/categories/{cid}/auto-schedule returns the same-shape payload; (10) with 3 grounds and a 6-team league on one day, matches are distributed across grounds (>=2 grounds used, no single ground hosts >75%). Seeded tournaments (Verified League 6/6, CAWDADC 26+/1) both scheduled cleanly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_scheduling_engine.py",
+    "/app/test_reports/pytest/scheduling_engine.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Pure `knockout` categories only schedule Round 1 in one pass because targets require home_id AND away_id, and later rounds are populated only when winners advance. This is by design but not obvious — consider documenting or allowing scheduling with unresolved teams (bracket slot placeholders) so the whole knockout can be placed up-front alongside groups.",
+    "server.py `update_match` accepts a raw Dict — a caller can set arbitrary fields (locked, status, etc.) with no validation. Consider a MatchUpdate Pydantic model.",
+    "scheduling.py `_score_slot`: `edges` derivation `sorted(set([lo] + ([brk[1]] if brk else []) + [e for (s,e) in blocks if e >= lo]))` can miss the natural step points `t += dur+gap` used by build_slots when the ground has no prior bookings — it currently only starts at `lo` and existing block-ends. That's fine for balance/parallelism today but if you want to expose non-contiguous slot alignment (e.g., always :00 / :30), it will need explicit stepping.",
+    "scheduling.py detects rest as `warning` in detect_conflicts but the engine enforces min_rest as hard. Divergence between hard-enforcement in scheduling and warning-only in reporting is minor but worth aligning severity to 'error' since the invariant is hard.",
+    "`_team_time_ok` treats `no_back_to_back` as `eff = max(min_rest, dur)`. A team that legitimately can play two 60-min matches with 60 min rest would still be blocked by NB2B (needing 60 min break, same as duration). Verify this matches product intent."
+  ],
+  "updated_files": ["/app/backend/tests/test_scheduling_engine.py (new)"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "N/A — no auth",
+  "seed_data_creation": "Test-owned tournaments created with TEST_ prefix for locked/knockout/infeasibility/balance cases; each cleaned up via DELETE /api/tournaments/{tid} in finally blocks. Seeded 'Verified League' and 'CAWDADC' tournaments were only read + auto-scheduled (no destructive edits).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/test_scheduling_engine.py -v. Uses REACT_APP_BACKEND_URL (falls back to reading /app/frontend/.env). Existing pytest.ini already has -n 2 xdist; tests are xdist-safe (each test creates its own tournament). Seeded IDs: SEEDED_LEAGUE=91d2837c-39fa-4b2b-bafe-9e874821d8a1, SEEDED_MULTI=4fd6415f-36c0-4be0-aad1-ae308fabfe9c. The knockout-progression test seeds later-round team ids manually (see TestKnockoutProgression) because the engine only picks matches with both home_id and away_id.",
+  "rca of the issue": "N/A — no bug reproduced; feature-level review only."
+}

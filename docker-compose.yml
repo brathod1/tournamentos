@@ -1,0 +1,39 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: tournamentos-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build: ./backend
+    container_name: tournamentos-backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      MONGO_URL: "mongodb://mongo:27017"
+      DB_NAME: "test_database"
+      CORS_ORIGINS: "*"
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build: ./frontend
+    container_name: tournamentos-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # The browser (on your host) calls the backend on localhost:8001
+      REACT_APP_BACKEND_URL: "http://localhost:8001"
+      WDS_SOCKET_PORT: "0"
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongo_data:

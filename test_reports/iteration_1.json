@@ -1,0 +1,39 @@
+{
+  "summary": "Verified the date-editing bug fix end-to-end. Backend: 7/7 pytest tests passed covering create-without-dates, 400 error when scheduling without dates, PUT persists dates, single-day scheduling with only start_date works, and all scheduled matches fall on the single day. Frontend Playwright: full flow passed — created tournament without dates, saw 'No dates set' amber badge, generated fixtures, got the date-error toast on Schedule Whole Tournament, opened Edit dialog with edit-tournament-btn, saved with only start_date (2026-05-10), header updated, re-ran scheduler (2 scheduled + 4 unfit due to legitimate single-day/single-ground capacity — not a bug), and date persisted after page reload.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ScheduleTab constraints form", "issues": ["React console warning: 'value prop on input should not be null' — a constraints Input receives null for break_start/break_end/start_date. Should default to '' to keep it controlled."]},
+      {"screen": "All shadcn Dialogs", "issues": ["Radix a11y warning: Missing Description or aria-describedby on DialogContent. Add a DialogDescription for each Dialog."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_date_editing_flow.py",
+    "/app/backend/tests/test_tournament_api.py",
+    "/app/test_reports/pytest/date_editing.xml"
+  ],
+  "action_items": [
+    "(Non-blocking) Fix controlled-input warning in ScheduleTab: coerce nullable constraint fields to '' before passing to <Input value=...>.",
+    "(Non-blocking) Add DialogDescription (or aria-describedby) to Dialogs to remove Radix a11y warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py update_tournament accepts a raw Dict[str, Any] with no field whitelist — a client could set arbitrary keys (e.g., created_at, status) on the tournament. Consider a TournamentUpdate Pydantic model.",
+    "Dashboard.create() and TournamentDetail.saveEdit() both default end_date to start_date on the client. Backend also treats empty end_date as start_date in the scheduler, but PUT stores whatever the client sends. Single source of truth would be cleaner (either always normalize server-side or never at all).",
+    "server.py PUT /tournaments/{tid} does not verify the tournament exists before update_one — a bogus id silently updates 0 rows then get_or_404 correctly 404s, so behavior is fine but a first existence check would be more explicit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_date_editing_flow.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (all 12 UI steps)"},
+  "test_credentials": "N/A — no auth",
+  "seed_data_creation": "All TEST_-prefixed data created during tests (tournaments, categories, teams, grounds). Module-scoped fixture deletes tournament (cascades) on teardown for backend tests. Frontend test leaves a TEST_UI_<id> tournament in DB.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug-fix flow fully verified. Data-testids used: edit-tournament-btn, edit-start-date, edit-end-date, save-tournament-edit-btn, run-tournament-scheduler-btn. Single-day scheduling works (empty end_date -> uses start_date on backend). Only non-blocking React warnings remain (controlled input null + Dialog aria).",
+  "rca of the issue": "Root cause was two-fold: (1) TournamentDetail lacked any Edit affordance so once created, dates could not be changed; (2) auto-schedule required both start and end even for single-day events. Fix adds edit-tournament-btn opening a Dialog that PUTs to /api/tournaments/{id}, and the schedule endpoint now falls back end_date=start_date when only start is set. Both branches confirmed via API tests and Playwright UI test."
+}
