@@ -10,7 +10,33 @@ Board findings below are from code analysis and are marked as such.
 
 ---
 
-## A. Executive Summary
+> ## ⚑ POST-FIX UPDATE (same day)
+> Every P1 and P2 finding below has since been fixed on the `develop` branch, plus the
+> referee auto-assignment backlog feature. Verified state after fixes:
+> **QA harness 143/143 · pytest 28/28 (was 5 failed) · scheduler still places 61 matches with zero constraint violations.**
+>
+> | Finding | Status |
+> |---|---|
+> | Bug 1 unvalidated `PUT /matches` | FIXED — `MatchUpdate` model, whitelist + format validation (422) |
+> | Bug 2 team-deletion orphans | FIXED — 409 with guidance while fixtures reference the team |
+> | Bug 3 regen duplicates locked pairing | FIXED — regeneration blocked (409) while locked matches exist |
+> | Bug 4 silent ground fallback | FIXED — `no_grounds` error + suggestion, nothing silently placed |
+> | Bug 5 half-score marks completed | FIXED — both scores required |
+> | Bug 6 knockout draws stall bracket | FIXED — equal scores rejected (422) with a clear message |
+> | Bug 7 locked matches draggable | FIXED — undraggable + lock badge in UI, 409 enforced server-side |
+> | Bug 8 tests depend on dev-server data | FIXED — suite is self-contained, 28/28 passing anywhere |
+> | Seeded bracket ignored `seed` field | FIXED — seed order honoured (regression-guarded) |
+> | No delete confirmations | FIXED — `ConfirmDelete` on tournament/category/team/ground/referee |
+> | Board clamped to 06:00–22:00 | FIXED — window derives from ground hours + placed matches |
+> | Referee auto-assignment (backlog P1) | **IMPLEMENTED** — post-scheduling pass, no clashes, daily limits, even spread; surfaced in Schedule/Reports/CSV/Board |
+>
+> Remaining known gaps: no authentication (by design, still not internet-safe), no undo/audit
+> trail, and referee coverage can legitimately fall short when officials' daily limits are
+> exhausted — reported as a warning, never silently.
+>
+> **Revised verdict: READY** for supervised real-world use on a trusted network.
+
+## A. Executive Summary (original assessment, pre-fix)
 
 **Verdict: READY WITH MINOR FIXES** — for a supervised organizer who understands the limits.
 **NOT READY** as-is for an unattended, production, multi-organizer deployment.

@@ -3,7 +3,7 @@ import { api } from "../../lib/api";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../ui/dialog";
-import { SectionTitle, Empty, Labeled, Overline, groundLabel } from "../bits";
+import { SectionTitle, Empty, Labeled, Overline, groundLabel, ConfirmDelete } from "../bits";
 import { MapPin, Plus, Trash2, Flag as Whistle, Clock, Zap } from "lucide-react";
 import { toast } from "sonner";
 
@@ -41,7 +41,12 @@ export default function VenuesTab({ tid }) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {grounds.map((g) => (
               <div key={g.id} data-testid={`ground-card-${g.id}`} className="border border-zinc-800 bg-zinc-900/50 p-5">
-                <div className="flex justify-between items-start"><h4 className="font-display text-xl uppercase">{groundLabel(g.name)}</h4><button data-testid={`delete-ground-${g.id}`} onClick={async () => { await api.deleteGround(g.id); load(); }} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button></div>
+                <div className="flex justify-between items-start"><h4 className="font-display text-xl uppercase">{groundLabel(g.name)}</h4>
+                  <ConfirmDelete title="Delete ground?" testId={`confirm-delete-ground-${g.id}`}
+                    description={`Deleting "${groundLabel(g.name)}" affects any matches already scheduled on it and any category restricted to it — you'll need to reschedule.`}
+                    onConfirm={async () => { await api.deleteGround(g.id); load(); }}>
+                    <button data-testid={`delete-ground-${g.id}`} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                  </ConfirmDelete></div>
                 <div className="text-sm text-zinc-400 mt-3 space-y-1">
                   <div>{g.surface} {g.lighting && <span className="text-lime-400 ml-1 inline-flex items-center gap-1"><Zap className="w-3 h-3" />Floodlit</span>}</div>
                   {(g.open_time || g.close_time) && <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-zinc-600" />{g.open_time || "—"} – {g.close_time || "—"}</div>}
@@ -60,7 +65,12 @@ export default function VenuesTab({ tid }) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {refs.map((r) => (
               <div key={r.id} data-testid={`referee-card-${r.id}`} className="border border-zinc-800 bg-zinc-900/50 p-5">
-                <div className="flex justify-between items-start"><h4 className="font-display text-xl uppercase">{r.name}</h4><button data-testid={`delete-referee-${r.id}`} onClick={async () => { await api.deleteReferee(r.id); load(); }} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button></div>
+                <div className="flex justify-between items-start"><h4 className="font-display text-xl uppercase">{r.name}</h4>
+                  <ConfirmDelete title="Delete referee?" testId={`confirm-delete-referee-${r.id}`}
+                    description={`This removes "${r.name}" from the tournament and unassigns them from any matches.`}
+                    onConfirm={async () => { await api.deleteReferee(r.id); load(); }}>
+                    <button data-testid={`delete-referee-${r.id}`} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                  </ConfirmDelete></div>
                 <div className="text-sm text-zinc-400 mt-3 space-y-1">
                   {r.certification && <div className="text-lime-400 text-xs uppercase tracking-wider">{r.certification}</div>}
                   {r.experience_years != null && <div>{r.experience_years} yrs experience</div>}

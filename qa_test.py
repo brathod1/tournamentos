@@ -193,7 +193,9 @@ def phase_build():
     }, ground_ids=[g[3], g[4], g[5]], seeded=True)
     GC["u23"] = u23
     u23map = {}
-    for i in range(1, 17):
+    # deliberately created OUT of seed order — a seeded bracket must honour the seed
+    # field, not insertion order (regression guard for the seeding fix)
+    for i in list(range(16, 0, -1)):
         n = f"U23 Seed {i:02d}"
         u23map[n] = mk_team(u23, n, seed=i, max_matches_per_day=2)
     GC["u23_teams"] = u23map
@@ -488,10 +490,43 @@ def phase_schedule():
           not ko_placed, [m["id"] for m in ko_placed][:5])
     info(sec, "OB group placed", f"{len(grp_placed)}/12")
 
-    # referee assignment state
-    any_ref = [m["id"] for m, c, dur in placed if m.get("referee_id")]
-    info(sec, "referee_id set on scheduled matches",
-         f"{len(any_ref)} of {len(placed)} (empty => auto-assignment NOT implemented, matches backlog)")
+    # ---------- referee auto-assignment ----------
+    sec_r = "3-referees"
+    refs = {r["id"]: r for r in jget(f"/tournaments/{tid}/referees")}
+    with_ref = [(m, c, dur) for m, c, dur in placed if m.get("referee_id")]
+    gap = len(placed) - len(with_ref)
+    # Full coverage OR an explicit warning — never a silent gap.
+    ref_warned = any(c["type"] == "referee_capacity" for c in resp.get("conflicts", []))
+    check(sec_r, "referee coverage is complete or the shortfall is reported",
+          gap == 0 or ref_warned, f"{len(with_ref)}/{len(placed)} assigned, warned={ref_warned}")
+    if gap:
+        info(sec_r, "referee shortfall",
+             f"{gap} match(es) uncovered — officials' daily limits exhausted (warning raised)")
+    check(sec_r, "assigned referee ids all exist",
+          all(m["referee_id"] in refs for m, c, d in with_ref))
+    ref_sched = defaultdict(list)
+    for m, c, dur in with_ref:
+        ref_sched[m["referee_id"]].append((m["date"], parse_t(m["time"]), parse_t(m["time"]) + dur, m["id"]))
+    v_overlap, v_max = [], []
+    for rid, lst in ref_sched.items():
+        lst.sort()
+        per_day = defaultdict(int)
+        for (d, s, e, mid) in lst:
+            per_day[d] += 1
+        mx = int(refs[rid].get("max_matches_per_day") or 0)
+        if mx and any(v > mx for v in per_day.values()):
+            v_max.append((refs[rid]["name"], dict(per_day), f"max {mx}"))
+        for i in range(len(lst) - 1):
+            if lst[i][0] == lst[i + 1][0] and lst[i + 1][1] < lst[i][2]:
+                v_overlap.append((refs[rid]["name"], lst[i][3], lst[i + 1][3]))
+    check(sec_r, "no referee officiates two overlapping matches", not v_overlap, v_overlap[:5])
+    check(sec_r, "referee max matches/day respected", not v_max, v_max[:5])
+    loads = sorted(len(v) for v in ref_sched.values())
+    info(sec_r, "referee workload spread", f"{len(ref_sched)} officials used, loads {loads}")
+    # idempotent re-run endpoint
+    r2 = api("POST", f"/tournaments/{tid}/assign-referees")
+    check(sec_r, "standalone /assign-referees endpoint works",
+          r2.status_code == 200 and r2.json().get("assigned", 0) > 0, r2.text[:200])
 
     # conflicts endpoint agrees
     cf = jget(f"/tournaments/{tid}/conflicts")["conflicts"]

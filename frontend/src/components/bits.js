@@ -1,4 +1,26 @@
 import React from "react";
+import {
+  AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
+} from "./ui/alert-dialog";
+
+/** Wraps any trigger element in a destructive-action confirmation dialog. */
+export const ConfirmDelete = ({ title, description, onConfirm, children, testId }) => (
+  <AlertDialog>
+    <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
+    <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none">
+      <AlertDialogHeader>
+        <AlertDialogTitle className="font-display uppercase">{title}</AlertDialogTitle>
+        <AlertDialogDescription className="text-zinc-400">{description}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel className="rounded-none bg-zinc-800 border-zinc-700 hover:bg-zinc-700">Cancel</AlertDialogCancel>
+        <AlertDialogAction data-testid={testId} onClick={onConfirm}
+          className="rounded-none bg-red-600 text-white hover:bg-red-700 font-bold uppercase">Delete</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+);
 
 export const Overline = ({ children, className = "" }) => (
   <div className={`text-[10px] uppercase tracking-[0.25em] text-zinc-500 font-semibold ${className}`}>{children}</div>

@@ -5,7 +5,7 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../ui/dialog";
-import { SectionTitle, Empty, Labeled, Overline } from "../bits";
+import { SectionTitle, Empty, Labeled, Overline, ConfirmDelete } from "../bits";
 import { Layers, Plus, Trash2, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -51,7 +51,11 @@ export default function CategoriesTab({ tid, categories, reload }) {
                 <h3 className="font-display text-2xl uppercase tracking-tight leading-none">{c.name}</h3>
                 <div className="flex gap-2">
                   <button data-testid={`edit-category-${c.id}`} onClick={() => openEdit(c)} className="text-zinc-600 hover:text-lime-400"><Settings2 className="w-4 h-4" /></button>
-                  <button data-testid={`delete-category-${c.id}`} onClick={() => remove(c.id)} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                  <ConfirmDelete title="Delete category?" testId={`confirm-delete-category-${c.id}`}
+                    description={`This permanently deletes "${c.name}" along with its ${c.team_count} team(s) and ${c.match_count} match(es), including any results already entered.`}
+                    onConfirm={() => remove(c.id)}>
+                    <button data-testid={`delete-category-${c.id}`} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                  </ConfirmDelete>
                 </div>
               </div>
               <span className="inline-block mt-3 text-[10px] uppercase tracking-widest px-2 py-1 bg-zinc-800 text-lime-400">{FORMATS.find((f) => f.value === c.format)?.label || c.format}</span>

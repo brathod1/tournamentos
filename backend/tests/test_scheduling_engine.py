@@ -1,5 +1,9 @@
 """Backend tests for TournamentOS Scheduling Engine.
 
+Self-contained: every test builds (and cleans up) its own tournament, so the suite
+runs against any backend with an empty database. Point it at a backend with
+REACT_APP_BACKEND_URL, otherwise it falls back to the frontend .env, then localhost:8001.
+
 Covers invariants:
  - endpoint response shape
  - no ground clash / no team overlap on committed schedule
@@ -18,24 +22,26 @@ import pytest
 from datetime import datetime, timedelta
 
 def _load_base():
+    """Backend base URL: env var wins, then the frontend .env, then local dev default."""
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if not v:
-        try:
-            with open("/app/frontend/.env") as f:
-                for ln in f:
-                    if ln.startswith("REACT_APP_BACKEND_URL="):
-                        v = ln.strip().split("=", 1)[1]
-                        break
-        except Exception:
-            pass
+        here = os.path.dirname(os.path.abspath(__file__))
+        for candidate in (os.path.join(here, "..", "..", "frontend", ".env"), "/app/frontend/.env"):
+            try:
+                with open(candidate) as f:
+                    for ln in f:
+                        if ln.startswith("REACT_APP_BACKEND_URL="):
+                            v = ln.strip().split("=", 1)[1].strip().strip('"')
+                            break
+            except Exception:
+                continue
+            if v:
+                break
     if not v:
-        raise RuntimeError("REACT_APP_BACKEND_URL missing")
+        v = "http://localhost:8001"
     return v.rstrip("/") + "/api"
 
 BASE = _load_base()
-
-SEEDED_LEAGUE = "91d2837c-39fa-4b2b-bafe-9e874821d8a1"     # Verified League (6/6 expected)
-SEEDED_MULTI = "4fd6415f-36c0-4be0-aad1-ae308fabfe9c"       # CAWDADC (multi-cat)
 
 
 def _parse(t):
@@ -44,33 +50,77 @@ def _parse(t):
 
 
 # ------------------------------------------------------------------
-# Response shape + core invariants against seeded League
+# Self-contained fixtures: every test builds the data it needs, so the
+# suite runs against any backend (local, CI, preview) with an empty DB.
 # ------------------------------------------------------------------
-class TestSeededLeague:
-    def test_auto_schedule_shape(self):
-        r = requests.post(f"{BASE}/tournaments/{SEEDED_LEAGUE}/auto-schedule")
+@pytest.fixture(scope="module")
+def league_tour():
+    """4-team single round robin (6 matches) on 2 grounds over 5 days — always feasible."""
+    tid = _mk_tour("league", "2026-06-01", "2026-06-05")
+    g1 = _mk_ground(tid, "LG1")
+    g2 = _mk_ground(tid, "LG2")
+    cid = _mk_cat(tid, "Verified League", "league_single", [g1, g2], constraints={
+        "start_date": "2026-06-01", "end_date": "2026-06-05",
+        "earliest_time": "08:00", "latest_time": "20:00",
+        "match_duration_minutes": 60, "slot_gap_minutes": 15,
+        "min_rest_minutes": 60, "max_matches_per_day": 0,
+    })
+    for i in range(4):
+        _mk_team(cid, f"L{i+1}", seed=i + 1)
+    assert requests.post(f"{BASE}/categories/{cid}/generate-fixtures").status_code == 200
+    yield {"tid": tid, "cid": cid, "grounds": [g1, g2], "expected_matches": 6}
+    _cleanup(tid)
+
+
+@pytest.fixture(scope="module")
+def multi_tour():
+    """Two categories with different durations sharing 2 grounds on a tight 2-day window."""
+    tid = _mk_tour("multi", "2026-06-10", "2026-06-11")
+    g1 = _mk_ground(tid, "MG1")
+    g2 = _mk_ground(tid, "MG2")
+    base = {"start_date": "2026-06-10", "end_date": "2026-06-11",
+            "earliest_time": "08:00", "latest_time": "18:00",
+            "min_rest_minutes": 45, "max_matches_per_day": 0}
+    c1 = _mk_cat(tid, "MultiA", "league_single", [g1, g2],
+                 constraints={**base, "match_duration_minutes": 60, "slot_gap_minutes": 15})
+    for i in range(6):
+        _mk_team(c1, f"A{i+1}", seed=i + 1)
+    c2 = _mk_cat(tid, "MultiB", "league_single", [g1, g2],
+                 constraints={**base, "match_duration_minutes": 45, "slot_gap_minutes": 15})
+    for i in range(5):
+        _mk_team(c2, f"B{i+1}", seed=i + 1)
+    for c in (c1, c2):
+        assert requests.post(f"{BASE}/categories/{c}/generate-fixtures").status_code == 200
+    yield {"tid": tid, "cats": [c1, c2]}
+    _cleanup(tid)
+
+
+class TestLeagueSchedule:
+    def test_auto_schedule_shape(self, league_tour):
+        r = requests.post(f"{BASE}/tournaments/{league_tour['tid']}/auto-schedule")
         assert r.status_code == 200, r.text
         data = r.json()
         for k in ("scheduled", "unscheduled", "conflicts", "suggestions", "categories"):
             assert k in data, f"missing key {k}: {data}"
-        assert data["scheduled"] == 6
+        assert data["scheduled"] == league_tour["expected_matches"]
         assert data["unscheduled"] == 0
 
-    def test_schedule_endpoint_populated(self):
-        r = requests.get(f"{BASE}/tournaments/{SEEDED_LEAGUE}/schedule")
+    def test_schedule_endpoint_populated(self, league_tour):
+        requests.post(f"{BASE}/tournaments/{league_tour['tid']}/auto-schedule")
+        r = requests.get(f"{BASE}/tournaments/{league_tour['tid']}/schedule")
         assert r.status_code == 200
         matches = r.json()
-        assert len(matches) >= 6
+        assert len(matches) >= league_tour["expected_matches"]
         for m in matches:
             assert m.get("date"), m
             assert m.get("time"), m
             assert m.get("ground_id"), m
 
-    def test_no_ground_or_team_overlap_and_rest(self):
-        # Fetch tournament + categories to get durations & min_rest
-        cats = requests.get(f"{BASE}/tournaments/{SEEDED_LEAGUE}/categories").json()
+    def test_no_ground_or_team_overlap_and_rest(self, league_tour):
+        requests.post(f"{BASE}/tournaments/{league_tour['tid']}/auto-schedule")
+        cats = requests.get(f"{BASE}/tournaments/{league_tour['tid']}/categories").json()
         cat_by_id = {c["id"]: c for c in cats}
-        matches = requests.get(f"{BASE}/tournaments/{SEEDED_LEAGUE}/schedule").json()
+        matches = requests.get(f"{BASE}/tournaments/{league_tour['tid']}/schedule").json()
         # ground overlap
         by_gd = {}
         for m in matches:
@@ -104,9 +154,8 @@ class TestSeededLeague:
 # Fixtures untouched by scheduler
 # ------------------------------------------------------------------
 class TestFixturesUntouched:
-    def test_pairings_unchanged_after_schedule(self):
-        cats = requests.get(f"{BASE}/tournaments/{SEEDED_LEAGUE}/categories").json()
-        cid = cats[0]["id"]
+    def test_pairings_unchanged_after_schedule(self, league_tour):
+        cid = league_tour["cid"]
         before = requests.get(f"{BASE}/categories/{cid}/matches").json()
         before_map = {m["id"]: (m["home_id"], m["away_id"], m["round"], m["order"]) for m in before}
         r = requests.post(f"{BASE}/categories/{cid}/auto-schedule")
@@ -120,12 +169,11 @@ class TestFixturesUntouched:
 # ------------------------------------------------------------------
 # Multi-category tournament (CAWDADC) - shape and invariants + diagnostics
 # ------------------------------------------------------------------
-class TestSeededMulti:
-    def test_run_and_check_invariants(self):
-        r = requests.post(f"{BASE}/tournaments/{SEEDED_MULTI}/auto-schedule")
+class TestMultiCategory:
+    def test_run_and_check_invariants(self, multi_tour):
+        r = requests.post(f"{BASE}/tournaments/{multi_tour['tid']}/auto-schedule")
         assert r.status_code == 200, r.text
         data = r.json()
-        # Should have diagnostics if infeasible (expected ~1 unsched per problem statement)
         assert data["scheduled"] >= 20
         if data["unscheduled"] > 0:
             types = {c["type"] for c in data["conflicts"]}
@@ -136,8 +184,8 @@ class TestSeededMulti:
 
         # No 500 for infeasibility
         # Check no ground clash / no team overlap in committed placements
-        matches = requests.get(f"{BASE}/tournaments/{SEEDED_MULTI}/schedule").json()
-        cats = requests.get(f"{BASE}/tournaments/{SEEDED_MULTI}/categories").json()
+        matches = requests.get(f"{BASE}/tournaments/{multi_tour['tid']}/schedule").json()
+        cats = requests.get(f"{BASE}/tournaments/{multi_tour['tid']}/categories").json()
         cat_by_id = {c["id"]: c for c in cats}
         by_gd = {}
         for m in matches:
@@ -345,10 +393,8 @@ class TestInfeasibility:
 # Per-category endpoint returns same-shape response
 # ------------------------------------------------------------------
 class TestCategoryEndpoint:
-    def test_category_auto_schedule_shape(self):
-        cats = requests.get(f"{BASE}/tournaments/{SEEDED_LEAGUE}/categories").json()
-        cid = cats[0]["id"]
-        r = requests.post(f"{BASE}/categories/{cid}/auto-schedule")
+    def test_category_auto_schedule_shape(self, league_tour):
+        r = requests.post(f"{BASE}/categories/{league_tour['cid']}/auto-schedule")
         assert r.status_code == 200, r.text
         data = r.json()
         for k in ("scheduled", "unscheduled", "conflicts", "suggestions"):

@@ -62,12 +62,24 @@ def _seed_order(size):
     return res
 
 
+def _ordered_team_ids(teams, seeded):
+    """Team ids in competition order. When the category is seeded, honour each team's
+    `seed` number (1 = strongest, unseeded teams last); otherwise keep entry order."""
+    if not seeded:
+        return [t["id"] for t in teams]
+    def key(t):
+        s = t.get("seed")
+        return (1, 0) if s in (None, "") else (0, int(s))
+    return [t["id"] for t in sorted(teams, key=key)]
+
+
 def generate_matches(category, teams):
     """Generate match dicts (unscheduled) based on category format config.
     Returns list of dicts with keys: round, group, stage, home_id, away_id, order.
     """
     fmt = category.get("format", "league_single")
-    team_ids = [t["id"] for t in teams]
+    seeded = bool(category.get("seeded", False))
+    team_ids = _ordered_team_ids(teams, seeded)
     matches = []
     order = 0
 
@@ -92,8 +104,7 @@ def generate_matches(category, teams):
                     add(a, h, base + ri, "league")  # reverse home/away
 
     elif fmt == "knockout":
-        seeded = category.get("seeded", False)
-        ids = list(team_ids)
+        ids = list(team_ids)   # already seed-ordered when the category is seeded
         if not seeded:
             random.shuffle(ids)
         size = _next_pow2(len(ids))
@@ -140,8 +151,9 @@ def generate_matches(category, teams):
 
     elif fmt == "groups_knockout":
         num_groups = max(1, int(category.get("num_groups", 2)))
-        ids = list(team_ids)
-        random.shuffle(ids) if not category.get("seeded", False) else None
+        ids = list(team_ids)   # already seed-ordered when the category is seeded
+        if not seeded:
+            random.shuffle(ids)
         groups = {i: [] for i in range(num_groups)}
         # snake allocation for balance
         gi, direction = 0, 1
@@ -443,6 +455,81 @@ def detect_all_conflicts(items):
             continue
         seen.add(k); uniq.append(c)
     return uniq
+
+
+# ---------------------------------------------------------------------------
+# REFEREE ASSIGNMENT
+# ---------------------------------------------------------------------------
+
+def assign_referees(placed, referees, keep_locked=True):
+    """Assign a referee to each already-scheduled match.
+
+    Strictly a post-scheduling pass: it only ever sets `referee_id`, never date/time/ground
+    and never fixtures. Hard constraints: a referee cannot officiate two overlapping
+    matches (including travel-free back-to-back on different grounds at the same instant)
+    and cannot exceed their own `max_matches_per_day`. Soft objective: spread work evenly,
+    preferring the least-loaded eligible official (experience breaks ties).
+
+    placed: [{id, date, time, dur, ground_id, locked, referee_id}] — mutated in place.
+    Returns (assigned_count, unassigned_matches, conflicts).
+    """
+    conflicts = []
+    if not referees:
+        if placed:
+            conflicts.append({"type": "no_referees", "severity": "warning",
+                "message": "No referees defined — matches were scheduled without officials. "
+                           "Add referees in Grounds & Referees, then re-run assignment."})
+        return 0, list(placed), conflicts
+
+    busy = defaultdict(list)      # ref_id -> [(date, start, end)]
+    day_count = defaultdict(int)  # (ref_id, date) -> count
+    total = defaultdict(int)      # ref_id -> total matches
+
+    # Respect referees already pinned on locked matches.
+    for m in placed:
+        if keep_locked and m.get("locked") and m.get("referee_id"):
+            s = _parse_t(m["time"])
+            busy[m["referee_id"]].append((m["date"], s, s + m["dur"]))
+            day_count[(m["referee_id"], m["date"])] += 1
+            total[m["referee_id"]] += 1
+
+    targets = [m for m in placed
+               if not (keep_locked and m.get("locked") and m.get("referee_id"))]
+    targets.sort(key=lambda m: (m["date"], _parse_t(m["time"])))
+
+    assigned, unassigned = 0, []
+    for m in targets:
+        s = _parse_t(m["time"])
+        e = s + m["dur"]
+        d = m["date"]
+        best, best_key = None, None
+        for r in referees:
+            rid = r["id"]
+            mx = int(r.get("max_matches_per_day") or 0)
+            if mx and day_count[(rid, d)] >= mx:
+                continue
+            if any(od == d and s < oe and os_ < e for (od, os_, oe) in busy[rid]):
+                continue
+            # least loaded that day, then overall, then more experience first
+            key = (day_count[(rid, d)], total[rid], -(r.get("experience_years") or 0), r.get("name") or "")
+            if best_key is None or key < best_key:
+                best, best_key = r, key
+        if best is None:
+            m["referee_id"] = None
+            unassigned.append(m)
+            continue
+        rid = best["id"]
+        m["referee_id"] = rid
+        busy[rid].append((d, s, e))
+        day_count[(rid, d)] += 1
+        total[rid] += 1
+        assigned += 1
+
+    if unassigned:
+        conflicts.append({"type": "referee_capacity", "severity": "warning",
+            "message": f"{len(unassigned)} match(es) have no referee — every official was already "
+                       "busy or at their daily limit. Add referees or raise their max matches/day."})
+    return assigned, unassigned, conflicts
 
 
 # ---------------------------------------------------------------------------

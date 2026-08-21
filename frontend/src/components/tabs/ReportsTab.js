@@ -14,9 +14,10 @@ export default function ReportsTab({ tid, categories }) {
     setSchedule(sched);
     const grounds = await api.listGrounds(tid);
     const gmap = {}; grounds.forEach((g) => (gmap[g.id] = groundLabel(g.name)));
+    const rmap = {}; (await api.listReferees(tid)).forEach((r) => (rmap[r.id] = r.name));
     const tmap = {};
     for (const c of categories) { const ts = await api.listTeams(c.id); ts.forEach((t) => (tmap[t.id] = t.name)); }
-    setNames({ ...gmap, ...tmap });
+    setNames({ ...gmap, ...tmap, ...rmap });
   }, [tid, categories]);
   useEffect(() => { load(); }, [load]);
 
@@ -41,14 +42,14 @@ export default function ReportsTab({ tid, categories }) {
     n(a).localeCompare(n(b), undefined, { numeric: true, sensitivity: "base" }));
 
   const exportCSV = () => {
-    const rows = [["Date", "Time", "Category", "Home", "Away", "Ground", "Score", "Status"]];
+    const rows = [["Date", "Time", "Category", "Home", "Away", "Ground", "Referee", "Score", "Status"]];
     let ordered;
     if (view === "ground") {
       ordered = groundKeys.flatMap((gid) => [...byGround[gid]].sort(cmpTime));
     } else {
       ordered = [...schedule].sort(cmpTime);
     }
-    ordered.forEach((m) => rows.push([m.date, fmtTime(m.time), cat(m.category_id), n(m.home_id), n(m.away_id), n(m.ground_id), m.home_score != null ? `${m.home_score}-${m.away_score}` : "", m.status]));
+    ordered.forEach((m) => rows.push([m.date, fmtTime(m.time), cat(m.category_id), n(m.home_id), n(m.away_id), n(m.ground_id), m.referee_id ? n(m.referee_id) : "", m.home_score != null ? `${m.home_score}-${m.away_score}` : "", m.status]));
     const csv = rows.map((r) => r.map((c) => `"${c ?? ""}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = view === "ground" ? "schedule-by-ground.csv" : "schedule-by-time.csv"; a.click();
@@ -65,6 +66,7 @@ export default function ReportsTab({ tid, categories }) {
       <div className="col-span-2 text-right text-xs text-zinc-600 truncate flex flex-col items-end gap-0.5">
         <span className="text-lime-400 uppercase tracking-wider" data-testid={`report-cat-${m.id}`}>{cat(m.category_id)}</span>
         {view !== "ground" && <span>{n(m.ground_id)}</span>}
+        {m.referee_id && <span className="text-sky-400/80" data-testid={`report-ref-${m.id}`}>{n(m.referee_id)}</span>}
       </div>
     </div>
   );

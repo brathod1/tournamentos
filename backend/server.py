@@ -11,7 +11,8 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from scheduling import generate_matches, auto_schedule, detect_conflicts, compute_standings, schedule_matches, dates_in_range, detect_all_conflicts
+from scheduling import (generate_matches, auto_schedule, detect_conflicts, compute_standings,
+                        schedule_matches, dates_in_range, detect_all_conflicts, assign_referees)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -493,6 +494,25 @@ async def seed_knockout(cid: str):
 
 
 # --------------------------- SCHEDULING ---------------------------
+async def _assign_and_persist_referees(tid: str):
+    """Post-scheduling pass over every placed match in a tournament.
+    Only ever writes referee_id. Returns (assigned, unassigned, conflicts)."""
+    referees = await db.referees.find({"tournament_id": tid}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    cats = await db.categories.find({"tournament_id": tid}, {"_id": 0}).to_list(1000)
+    dur_by_cat = {c["id"]: int({**DEFAULT_CONSTRAINTS, **(c.get("constraints") or {})}
+                               .get("match_duration_minutes", 90)) for c in cats}
+    ms = await db.matches.find(
+        {"tournament_id": tid, "date": {"$ne": None}, "time": {"$ne": None}}, {"_id": 0}).to_list(20000)
+    placed = [{"id": m["id"], "date": m["date"], "time": m["time"],
+               "dur": dur_by_cat.get(m["category_id"], 90), "ground_id": m.get("ground_id"),
+               "locked": m.get("locked", False), "referee_id": m.get("referee_id")}
+              for m in ms if m.get("status") != "bye"]
+    assigned, unassigned, conflicts = assign_referees(placed, referees)
+    for p in placed:
+        await db.matches.update_one({"id": p["id"]}, {"$set": {"referee_id": p.get("referee_id")}})
+    return assigned, len(unassigned), conflicts
+
+
 async def _category_grounds(cat):
     gids = cat.get("ground_ids") or []
     if gids:
@@ -526,7 +546,10 @@ async def do_schedule(cid: str):
     for m in targets:
         await db.matches.update_one({"id": m["id"]}, {"$set": {
             "date": m.get("date"), "time": m.get("time"), "ground_id": m.get("ground_id")}})
-    return {"scheduled": len(scheduled), "unscheduled": len(unsch), "conflicts": conflicts, "suggestions": suggestions}
+    ref_assigned, ref_unassigned, ref_conflicts = await _assign_and_persist_referees(cat["tournament_id"])
+    return {"scheduled": len(scheduled), "unscheduled": len(unsch),
+            "conflicts": conflicts + ref_conflicts, "suggestions": suggestions,
+            "referees_assigned": ref_assigned, "referees_unassigned": ref_unassigned}
 
 
 @api_router.post("/tournaments/{tid}/auto-schedule")
@@ -557,8 +580,19 @@ async def schedule_tournament_ep(tid: str):
     for m in all_targets:
         await db.matches.update_one({"id": m["id"]}, {"$set": {
             "date": m.get("date"), "time": m.get("time"), "ground_id": m.get("ground_id")}})
-    return {"scheduled": len(scheduled), "unscheduled": len(unsch), "conflicts": conflicts,
-            "suggestions": suggestions, "categories": len(items)}
+    ref_assigned, ref_unassigned, ref_conflicts = await _assign_and_persist_referees(tid)
+    return {"scheduled": len(scheduled), "unscheduled": len(unsch),
+            "conflicts": conflicts + ref_conflicts, "suggestions": suggestions,
+            "categories": len(items),
+            "referees_assigned": ref_assigned, "referees_unassigned": ref_unassigned}
+
+
+@api_router.post("/tournaments/{tid}/assign-referees")
+async def assign_referees_ep(tid: str):
+    """Re-run referee assignment over the current schedule without rescheduling anything."""
+    await get_or_404(db.tournaments, tid, "Tournament")
+    assigned, unassigned, conflicts = await _assign_and_persist_referees(tid)
+    return {"assigned": assigned, "unassigned": unassigned, "conflicts": conflicts}
 
 
 @api_router.get("/categories/{cid}/conflicts")

@@ -5,7 +5,7 @@ import { Input } from "../ui/input";
 import { SectionTitle, Empty, Labeled, Overline, groundLabel } from "../bits";
 import { CategoryPicker } from "../../pages/TournamentDetail";
 import { Checkbox } from "../ui/checkbox";
-import { CalendarClock, Zap, AlertTriangle, CheckCircle2, Save, Layers } from "lucide-react";
+import { CalendarClock, Zap, AlertTriangle, CheckCircle2, Save, Layers, Flag as Whistle } from "lucide-react";
 import { toast } from "sonner";
 
 const DEFAULTS = { start_date: "", end_date: "", earliest_time: "08:00", latest_time: "20:00", match_duration_minutes: 90, slot_gap_minutes: 30, min_rest_minutes: 60, max_matches_per_day: 0, break_start: "", break_end: "" };
@@ -18,6 +18,7 @@ export default function ScheduleTab({ tid, categories, activeCat, setActiveCat }
   const [suggestions, setSuggestions] = useState([]);
   const [running, setRunning] = useState(false);
   const [runningAll, setRunningAll] = useState(false);
+  const [assigningRefs, setAssigningRefs] = useState(false);
 
   const load = useCallback(() => {
     if (!activeCat) return;
@@ -64,8 +65,21 @@ export default function ScheduleTab({ tid, categories, activeCat, setActiveCat }
       setSuggestions(r.suggestions || []);
       if (r.unscheduled > 0) toast.warning(`${r.scheduled} scheduled across ${r.categories} categories · ${r.unscheduled} could not fit`);
       else toast.success(`All ${r.scheduled} matches scheduled across ${r.categories} categories`);
+      if (r.referees_assigned != null) toast.info(`${r.referees_assigned} referee assignment(s)${r.referees_unassigned ? ` · ${r.referees_unassigned} match(es) without an official` : ""}`);
     } catch (e) { toast.error(e.response?.data?.detail || "Scheduling failed"); }
     setRunningAll(false);
+  };
+
+  const runReferees = async () => {
+    setAssigningRefs(true);
+    try {
+      const r = await api.assignReferees(tid);
+      setConflicts((prev) => [...(r.conflicts || []), ...prev.filter((c) => !String(c.type).startsWith("referee") && c.type !== "no_referees")]);
+      if (r.unassigned > 0) toast.warning(`${r.assigned} assigned · ${r.unassigned} match(es) left without an official`);
+      else if (r.assigned === 0) toast.warning("Nothing to assign — schedule matches and add referees first");
+      else toast.success(`${r.assigned} referee assignment(s) made`);
+    } catch (e) { toast.error(e.response?.data?.detail || "Referee assignment failed"); }
+    setAssigningRefs(false);
   };
 
   const errors = conflicts.filter((x) => x.severity === "error");
@@ -81,9 +95,12 @@ export default function ScheduleTab({ tid, categories, activeCat, setActiveCat }
       <div className="border border-lime-400/30 bg-lime-400/5 p-6 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <Overline className="text-lime-400 flex items-center gap-2"><Layers className="w-3.5 h-3.5" />Master Schedule · All Categories</Overline>
-          <p className="text-sm text-zinc-400 mt-2 max-w-2xl">Schedules every category together on the shared grounds so parallel categories never collide. Fixtures stay untouched — only dates, times and grounds are (re)assigned. Locked matches are preserved as fixed anchors.</p>
+          <p className="text-sm text-zinc-400 mt-2 max-w-2xl">Schedules every category together on the shared grounds so parallel categories never collide. Fixtures stay untouched — only dates, times and grounds are (re)assigned. Locked matches are preserved as fixed anchors. Referees are assigned afterwards, respecting each official's daily limit and avoiding clashes.</p>
         </div>
-        <Button data-testid="run-tournament-scheduler-btn" onClick={runTournament} disabled={runningAll} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider gap-2 shrink-0"><Zap className="w-4 h-4" />{runningAll ? "Solving…" : "Schedule Whole Tournament"}</Button>
+        <div className="flex gap-3 shrink-0 flex-wrap">
+          <Button data-testid="assign-referees-btn" onClick={runReferees} disabled={assigningRefs} className="rounded-none bg-zinc-800 text-zinc-100 hover:bg-zinc-700 font-bold uppercase tracking-wider gap-2"><Whistle className="w-4 h-4" />{assigningRefs ? "Assigning…" : "Assign Referees"}</Button>
+          <Button data-testid="run-tournament-scheduler-btn" onClick={runTournament} disabled={runningAll} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider gap-2"><Zap className="w-4 h-4" />{runningAll ? "Solving…" : "Schedule Whole Tournament"}</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -462,11 +462,14 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     r = api("DELETE", f"/referees/{GC['refs'][-1]}")
     check(sec, "referee delete ok", r.status_code == 200)
     check(sec, "referee list reflects delete", len(jget(f"/tournaments/{tid}/referees")) == 9)
+    # deleting a referee then re-assigning must not leave that referee on any match
+    api("POST", f"/tournaments/{tid}/assign-referees")
     all_ms = jget(f"/tournaments/{tid}/schedule")
+    live = {r["id"] for r in jget(f"/tournaments/{tid}/referees")}
+    stale = [m["id"] for m in all_ms if m.get("referee_id") and m["referee_id"] not in live]
+    check(sec, "no match references a deleted referee after re-assignment", not stale, stale[:5])
     assigned = [m for m in all_ms if m.get("referee_id")]
-    info(sec, "referee auto-assignment classification",
-         f"{len(assigned)}/{len(all_ms)} scheduled matches have a referee -> "
-         + ("IMPLEMENTED" if assigned else "NOT IMPLEMENTED (matches handoff backlog P1)"))
+    info(sec, "referee auto-assignment", f"{len(assigned)}/{len(all_ms)} scheduled matches have an official")
 
     # broken bracket links across the whole grand tournament
     sec = "10-links"

@@ -40,6 +40,7 @@ export const api = {
   // scheduling
   autoSchedule: (cid) => http.post(`/categories/${cid}/auto-schedule`).then((r) => r.data),
   scheduleTournament: (tid) => http.post(`/tournaments/${tid}/auto-schedule`).then((r) => r.data),
+  assignReferees: (tid) => http.post(`/tournaments/${tid}/assign-referees`).then((r) => r.data),
   conflicts: (cid) => http.get(`/categories/${cid}/conflicts`).then((r) => r.data),
   tournamentConflicts: (tid) => http.get(`/tournaments/${tid}/conflicts`).then((r) => r.data),
   // standings

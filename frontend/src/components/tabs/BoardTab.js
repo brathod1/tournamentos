@@ -4,9 +4,7 @@ import { SectionTitle, Empty, Overline, groundLabel } from "../bits";
 import { LayoutGrid, AlertTriangle, CheckCircle2, Coffee, Lock } from "lucide-react";
 import { toast } from "sonner";
 
-const START = 6 * 60, END = 22 * 60, STEP = 30, ROW_H = 56;
-const SLOTS = [];
-for (let t = START; t < END; t += STEP) SLOTS.push(t);
+const DEFAULT_START = 6 * 60, DEFAULT_END = 22 * 60, STEP = 30, ROW_H = 56;
 const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const fmt12 = (m) => { let h = Math.floor(m / 60); const mm = String(m % 60).padStart(2, "0"); const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12; return `${h}:${mm}${ap}`; };
 const parse = (s) => { const [a, b] = s.split(":"); return +a * 60 + +b; };
@@ -40,6 +38,7 @@ export default function BoardTab({ tid, categories }) {
     setGrounds(g);
     const sched = await api.schedule(tid);
     const nm = {}; g.forEach((x) => (nm[x.id] = groundLabel(x.name)));
+    (await api.listReferees(tid)).forEach((r) => (nm[r.id] = r.name));
     const dmap = {};
     for (const c of categories) {
       const ts = await api.listTeams(c.id); ts.forEach((t) => (nm[t.id] = t.short_name || t.name));
@@ -56,6 +55,25 @@ export default function BoardTab({ tid, categories }) {
 
   const dayMatches = matches.filter((m) => m.date === date && m.time && m.ground_id);
   const dur = (m) => durs[m.category_id] || 90;
+
+  // Grid window: wide enough for every ground's opening hours and every placed match,
+  // so nothing is ever rendered outside the visible calendar.
+  const [START, END] = (() => {
+    let lo = DEFAULT_START, hi = DEFAULT_END;
+    grounds.forEach((g) => {
+      if (g.open_time) lo = Math.min(lo, parse(g.open_time));
+      if (g.close_time) hi = Math.max(hi, parse(g.close_time));
+    });
+    dayMatches.forEach((m) => {
+      lo = Math.min(lo, parse(m.time));
+      hi = Math.max(hi, parse(m.time) + dur(m));
+    });
+    lo = Math.max(0, Math.floor(lo / STEP) * STEP);
+    hi = Math.min(24 * 60, Math.ceil(hi / STEP) * STEP);
+    return [lo, Math.max(hi, lo + STEP)];
+  })();
+  const SLOTS = [];
+  for (let t = START; t < END; t += STEP) SLOTS.push(t);
 
   const bad = (() => {
     const set = new Set();
@@ -168,7 +186,7 @@ export default function BoardTab({ tid, categories }) {
                           <div key={m.id} draggable={!m.locked}
                             onDragStart={(e) => { if (m.locked) { e.preventDefault(); return; } setDrag(m.id); }}
                             data-testid={`board-match-${m.id}`}
-                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.locked ? " · locked" : ""}`}
+                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.referee_id ? ` · ref ${names[m.referee_id] || "?"}` : ""}${m.locked ? " · locked" : ""}`}
                             style={{
                               position: "absolute",
                               top: ((s - START) / STEP) * ROW_H + 2,

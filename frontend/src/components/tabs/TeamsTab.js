@@ -4,7 +4,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../ui/dialog";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
-import { SectionTitle, Empty, Labeled, Overline } from "../bits";
+import { SectionTitle, Empty, Labeled, Overline, ConfirmDelete } from "../bits";
 import { CategoryPicker } from "../../pages/TournamentDetail";
 import { Users, Plus, Trash2, UserCog, Clock, Ban, Settings2 } from "lucide-react";
 import { toast } from "sonner";
@@ -75,7 +75,11 @@ export default function TeamsTab({ categories, activeCat, setActiveCat, reload }
               </div>
               <div className="col-span-1 text-right flex justify-end gap-2">
                 <button data-testid={`edit-team-${t.id}`} onClick={() => openEdit(t)} className="text-zinc-600 hover:text-lime-400"><Settings2 className="w-4 h-4" /></button>
-                <button data-testid={`delete-team-${t.id}`} onClick={() => remove(t.id)} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                <ConfirmDelete title="Remove team?" testId={`confirm-delete-team-${t.id}`}
+                  description={`This removes "${t.name}" from the category. If fixtures already exist for this team you'll need to clear or regenerate them first.`}
+                  onConfirm={() => remove(t.id)}>
+                  <button data-testid={`delete-team-${t.id}`} className="text-zinc-600 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                </ConfirmDelete>
               </div>
             </div>
           ))}
