@@ -678,6 +678,8 @@ def _suggestions(reasons, items, grounds, tour_dates):
         out.append("Relax team unavailable dates or weekday/weekend preferences.")
     if reasons.get("dependency"):
         out.append("Later knockout rounds need earlier rounds finished first — add days or grounds so feeder matches complete in time.")
+    if reasons.get("grounds_missing"):
+        out.append("Reassign grounds to the affected categories — the grounds they were restricted to have been deleted.")
     if reasons.get("rest_or_b2b"):
         out.append("Reduce minimum rest, or turn off 'no back-to-back' for some teams.")
     if not out:
@@ -758,6 +760,11 @@ def schedule_matches(items, grounds, tour_dates):
 
     unscheduled = []
     for it, m in flat:
+        if it["cat_id"] in dead_cats:
+            m["_fail_reasons"] = {"grounds_missing": 1}
+            m["_desc"] = _match_desc(m, it)
+            unscheduled.append(m)
+            continue
         c = it["constraints"]
         dur = int(c.get("match_duration_minutes", 90))
         buf = int(c.get("slot_gap_minutes", 0))
@@ -868,7 +875,7 @@ def schedule_matches(items, grounds, tour_dates):
     scheduled = [m for it, m in flat if m.get("date")]
 
     # ---- Validation: recompute conflicts over the committed schedule ----
-    conflicts = []
+    conflicts = list(pre_conflicts)
     for it in items:
         conflicts += detect_conflicts(it["matches"] + it.get("locked", []), it["constraints"], it["team_info"])
     placed_all = []
@@ -913,6 +920,7 @@ def schedule_matches(items, grounds, tour_dates):
                 "team_date": "the teams' available/unavailable dates left no valid day",
                 "rest_or_b2b": "rest / no-back-to-back rules blocked every open slot",
                 "dependency": "the earlier rounds it depends on could not finish in time",
+                "grounds_missing": "its category is restricted to grounds that no longer exist",
             }.get(dominant, "no valid slot satisfied all constraints")
             uniq.append({"type": "unplaced_match", "severity": "error",
                 "message": f"{m.get('_desc', 'A match')} could not be scheduled — {why}."})

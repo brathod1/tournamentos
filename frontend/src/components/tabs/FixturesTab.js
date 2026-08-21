@@ -31,7 +31,9 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
   };
 
   const setScore = async (m, h, a) => {
-    await api.updateMatch(m.id, { home_score: h, away_score: a, status: h != null && a != null ? "completed" : "scheduled" });
+    try {
+      await api.updateMatch(m.id, { home_score: h, away_score: a, status: h != null && a != null ? "completed" : "scheduled" });
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not save score"); }
     load();
   };
   const toggleLock = async (m) => { await api.updateMatch(m.id, { locked: !m.locked }); load(); };
@@ -59,7 +61,7 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
             </AlertDialogTrigger>
             <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none">
               <AlertDialogHeader><AlertDialogTitle className="font-display uppercase">Generate Fixtures?</AlertDialogTitle>
-                <AlertDialogDescription className="text-zinc-400">This regenerates all unlocked fixtures for <b className="text-zinc-200">{cat?.name}</b> using the <b className="text-zinc-200">{cat?.format}</b> format. Locked matches are preserved. Existing results on unlocked matches will be cleared.</AlertDialogDescription></AlertDialogHeader>
+                <AlertDialogDescription className="text-zinc-400">This replaces all fixtures for <b className="text-zinc-200">{cat?.name}</b> using the <b className="text-zinc-200">{cat?.format}</b> format. Existing results and schedule slots will be cleared. If any matches are locked, unlock them first — regeneration is blocked while locked matches exist.</AlertDialogDescription></AlertDialogHeader>
               <AlertDialogFooter><AlertDialogCancel className="rounded-none bg-zinc-800 border-zinc-700 hover:bg-zinc-700">Cancel</AlertDialogCancel><AlertDialogAction data-testid="confirm-generate-btn" onClick={generate} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase">Generate</AlertDialogAction></AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

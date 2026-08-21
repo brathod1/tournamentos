@@ -245,12 +245,10 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     check(sec, "cleared result withdraws team from next round; next is pending",
           nm.get(f"{m0['next_slot']}_id") is None and nm["status"] == "pending",
           (nm.get(f"{m0['next_slot']}_id"), nm["status"]))
-    # draw in knockout: what happens?
-    api("PUT", f"/matches/{m0['id']}", json={"home_score": 1, "away_score": 1, "status": "completed"})
-    nm = next(m for m in jget(f"/categories/{GC['u23']}/matches") if m["id"] == m0["next_match_id"])
-    slot_key = m0["next_slot"] + "_id"
-    info(sec, "KO draw handling", f"next slot = {nm.get(slot_key)} "
-         "(None = no winner advanced; app has no tiebreak/penalties concept)")
+    # draws are not allowed in knockout — must be rejected with a clear message
+    r = api("PUT", f"/matches/{m0['id']}", json={"home_score": 1, "away_score": 1, "status": "completed"})
+    check(sec, "KO draw rejected (422) with clear message",
+          r.status_code == 422 and "draw" in r.text.lower(), (r.status_code, r.text[:120]))
     # full run-through R16->QF->SF->F
     api("PUT", f"/matches/{m0['id']}", json={"home_score": 2, "away_score": 0, "status": "completed"})
     ms = jget(f"/categories/{GC['u23']}/matches")
@@ -282,22 +280,19 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     sched = jget(f"/tournaments/{tid}/schedule")
     check(sec, "master schedule contains no stale Veterans rows",
           not any(m["category_id"] == vet for m in sched))
-    # regen with a locked match: lock one, regen, see what remains
+    # regen with a locked match must be blocked (would duplicate the kept fixture)
     api("PUT", f"/matches/{after[0]['id']}", json={"locked": True})
-    api("POST", f"/categories/{vet}/generate-fixtures")
+    r = api("POST", f"/categories/{vet}/generate-fixtures")
+    check(sec, "regeneration blocked while locked matches exist (409)", r.status_code == 409, r.status_code)
     after2 = jget(f"/categories/{vet}/matches")
-    dup_pairs = defaultdict(int)
-    for m in after2:
-        dup_pairs[tuple(sorted([m["home_id"], m["away_id"]]))] += 1
-    dups = {k: v for k, v in dup_pairs.items() if v > 2}   # double league: each pair twice is normal
-    info(sec, "regen with a locked match kept", f"{len(after2)} matches after regen (30 fresh + kept locked)")
-    check(sec, "regen with locked match: no pairing appears more often than the format allows",
-          not dups, f"{len(dups)} pairings duplicated — locked old fixture kept alongside a full new set")
-    # unlock whatever is locked and regenerate clean for UI use
+    check(sec, "blocked regen left the fixture set untouched (30, no duplicates)",
+          len(after2) == 30, len(after2))
+    # unlock and regenerate clean for UI use
     for m in after2:
         if m.get("locked"):
             api("PUT", f"/matches/{m['id']}", json={"locked": False})
-    api("POST", f"/categories/{vet}/generate-fixtures")
+    r = api("POST", f"/categories/{vet}/generate-fixtures")
+    check(sec, "regen works again after unlocking", r.status_code == 200, r.status_code)
 
     # ============================================================ 9. INTENTIONAL INFEASIBILITY A-F
     sec = "9-infeasible"
@@ -399,14 +394,11 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     r = api("POST", f"/tournaments/{tD}/auto-schedule")
     d = r.json()
     placedD = jget(f"/tournaments/{tD}/schedule")
-    if placedD:
-        info(sec, "D-inaccessible-ground",
-             f"category restricted to a NONEXISTENT ground silently fell back to all grounds "
-             f"({len(placedD)} matches placed on '{placedD[0]['ground_id']}') — silent fallback, no warning")
-        check(sec, "D: restricting to unavailable ground should not silently use other grounds", False,
-              "engine falls back to all tournament grounds when ground_ids resolve to nothing")
-    else:
-        check(sec, "D: unschedulable + diagnostics", d["unscheduled"] > 0 and d.get("suggestions"))
+    types = {c["type"] for c in d.get("conflicts", [])}
+    check(sec, "D: dead ground restriction fails loudly (nothing placed, no_grounds conflict, suggestions)",
+          not placedD and d.get("unscheduled", 0) > 0 and "no_grounds" in types
+          and len(d.get("suggestions", [])) > 0,
+          f"placed={len(placedD)}, unscheduled={d.get('unscheduled')}, conflict_types={sorted(types)}")
 
     # ============================================================ 10. CRUD & DATA INTEGRITY
     sec = "10-integrity"
