@@ -39,7 +39,10 @@ export default function TeamsTab({ categories, activeCat, setActiveCat, reload }
     else { await api.createTeam(activeCat, payload); toast.success("Team added"); }
     setOpen(false); load(); reload();
   };
-  const remove = async (id) => { await api.deleteTeam(id); toast.success("Team removed"); load(); reload(); };
+  const remove = async (id) => {
+    try { await api.deleteTeam(id); toast.success("Team removed"); load(); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || "Could not delete team"); }
+  };
 
   if (categories.length === 0) return <Empty icon={Users} title="No categories yet" hint="Create a category first — teams belong to a category." />;
 

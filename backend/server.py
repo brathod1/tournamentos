@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -133,6 +134,29 @@ class Referee(BaseModel):
     created_at: str = Field(default_factory=now_iso)
 
 
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+MATCH_STATUSES = ("scheduled", "completed", "bye", "pending")
+
+
+class MatchUpdate(BaseModel):
+    """Whitelisted, validated payload for PUT /matches/{mid}.
+    Immutable fields (id, tournament_id, category_id, round, order, stage, group,
+    bracket links) are intentionally absent; unknown fields are rejected."""
+    model_config = {"extra": "forbid"}
+    date: Optional[str] = None
+    time: Optional[str] = None
+    ground_id: Optional[str] = None
+    referee_id: Optional[str] = None
+    home_id: Optional[str] = None
+    away_id: Optional[str] = None
+    home_score: Optional[int] = None
+    away_score: Optional[int] = None
+    status: Optional[str] = None
+    locked: Optional[bool] = None
+    notes: Optional[str] = None
+
+
 async def get_or_404(coll, id, name="Resource"):
     doc = await coll.find_one({"id": id}, {"_id": 0})
     if not doc:
@@ -242,6 +266,14 @@ async def update_team(tid: str, data: Dict[str, Any]):
 
 @api_router.delete("/teams/{tid}")
 async def delete_team(tid: str):
+    team = await get_or_404(db.teams, tid, "Team")
+    n = await db.matches.count_documents({
+        "category_id": team["category_id"],
+        "$or": [{"home_id": tid}, {"away_id": tid}],
+    })
+    if n:
+        raise HTTPException(409, f"'{team['name']}' appears in {n} fixture(s). "
+                                 "Clear or regenerate the category's fixtures before deleting this team.")
     await db.teams.delete_one({"id": tid})
     return {"deleted": True}
 
@@ -305,8 +337,12 @@ async def gen_fixtures(cid: str):
     teams = await db.teams.find({"category_id": cid}, {"_id": 0}).to_list(5000)
     if len(teams) < 2:
         raise HTTPException(400, "Add at least 2 teams before generating fixtures.")
-    # remove non-locked existing matches
-    await db.matches.delete_many({"category_id": cid, "locked": {"$ne": True}})
+    locked_count = await db.matches.count_documents({"category_id": cid, "locked": True})
+    if locked_count:
+        raise HTTPException(409, f"{locked_count} locked match(es) exist in this category. "
+                                 "Unlock them (or clear all matches) before regenerating fixtures, "
+                                 "otherwise the kept fixtures would duplicate the new ones.")
+    await db.matches.delete_many({"category_id": cid})
     raw = generate_matches(cat, teams)
     docs = []
     for m in raw:
@@ -342,11 +378,30 @@ async def list_matches(cid: str):
 
 
 @api_router.put("/matches/{mid}")
-async def update_match(mid: str, data: Dict[str, Any]):
-    data.pop("id", None); data.pop("_id", None)
-    if "home_score" in data and "away_score" in data and data["home_score"] is not None:
-        data["status"] = data.get("status", "completed")
-    await db.matches.update_one({"id": mid}, {"$set": data})
+async def update_match(mid: str, upd: MatchUpdate):
+    data = upd.model_dump(exclude_unset=True)
+    if data.get("date") is not None and not DATE_RE.match(data["date"]):
+        raise HTTPException(422, "date must be YYYY-MM-DD")
+    if data.get("time") is not None and not TIME_RE.match(data["time"]):
+        raise HTTPException(422, "time must be HH:MM (24h)")
+    if data.get("status") is not None and data["status"] not in MATCH_STATUSES:
+        raise HTTPException(422, f"status must be one of {MATCH_STATUSES}")
+    existing = await get_or_404(db.matches, mid, "Match")
+    if existing.get("locked") and data.get("locked") is not False \
+            and any(k in data for k in ("date", "time", "ground_id")):
+        raise HTTPException(409, "Match is locked — unlock it before moving it.")
+    # knockout matches must produce a winner
+    if existing.get("stage") == "knockout" \
+            and data.get("home_score") is not None and data.get("away_score") is not None \
+            and data["home_score"] == data["away_score"]:
+        raise HTTPException(422, "Knockout matches cannot end in a draw — enter a decisive score "
+                                 "(after extra time / penalties).")
+    # a match is completed only when BOTH scores are present
+    if "home_score" in data and "away_score" in data \
+            and data["home_score"] is not None and data["away_score"] is not None:
+        data.setdefault("status", "completed")
+    if data:
+        await db.matches.update_one({"id": mid}, {"$set": data})
     m = await get_or_404(db.matches, mid, "Match")
     # Knockout: auto-advance the winner into the next round
     if m.get("stage") == "knockout" and m.get("next_match_id"):

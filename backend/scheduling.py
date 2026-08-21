@@ -712,6 +712,18 @@ def schedule_matches(items, grounds, tour_dates):
 
     reverse_feed, group_by_cat = _feeder_map(items)
 
+    # A category explicitly restricted to grounds that no longer exist must fail
+    # loudly instead of silently spilling onto every ground.
+    pre_conflicts = []
+    dead_cats = set()
+    for it in items:
+        _gids = it.get("ground_ids") or []
+        if _gids and not any(g in gmap for g in _gids):
+            dead_cats.add(it["cat_id"])
+            pre_conflicts.append({"type": "no_grounds", "severity": "error",
+                "message": "A category is restricted to ground(s) that no longer exist — "
+                           "reassign its grounds (Schedule tab) before scheduling."})
+
     # Pre-book locked/already-placed matches so the scheduler works around them.
     for it in items:
         c = it["constraints"]

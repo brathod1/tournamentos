@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "../../lib/api";
 import { SectionTitle, Empty, Overline, groundLabel } from "../bits";
-import { LayoutGrid, AlertTriangle, CheckCircle2, Coffee } from "lucide-react";
+import { LayoutGrid, AlertTriangle, CheckCircle2, Coffee, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 const START = 6 * 60, END = 22 * 60, STEP = 30, ROW_H = 56;
@@ -74,9 +74,13 @@ export default function BoardTab({ tid, categories }) {
   const onDrop = async (gid, t) => {
     if (!drag) return;
     const id = drag; setDrag(null);
-    await api.updateMatch(id, { ground_id: gid, time: fmt(t), date });
+    try {
+      await api.updateMatch(id, { ground_id: gid, time: fmt(t), date });
+      toast.success("Match moved");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not move match");
+    }
     await load();
-    toast.success("Match moved");
   };
   // Calendar-style lane layout: exact positions, side-by-side lanes only when matches truly overlap.
   const laneLayout = (gid) => {
@@ -161,8 +165,10 @@ export default function BoardTab({ tid, categories }) {
                         const col = colorFor(m.category_id);
                         const isBad = bad.has(m.id);
                         return (
-                          <div key={m.id} draggable onDragStart={() => setDrag(m.id)} data-testid={`board-match-${m.id}`}
-                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)`}
+                          <div key={m.id} draggable={!m.locked}
+                            onDragStart={(e) => { if (m.locked) { e.preventDefault(); return; } setDrag(m.id); }}
+                            data-testid={`board-match-${m.id}`}
+                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.locked ? " · locked" : ""}`}
                             style={{
                               position: "absolute",
                               top: ((s - START) / STEP) * ROW_H + 2,
@@ -171,9 +177,9 @@ export default function BoardTab({ tid, categories }) {
                               width: `calc(${100 / cols}% - 4px)`,
                               ...(isBad ? {} : { borderLeftColor: col }),
                             }}
-                            className={`pointer-events-auto cursor-move overflow-hidden px-2 py-1 text-[11px] leading-tight border-l-4 border-y border-r rounded-sm ${isBad ? "border-red-500 bg-red-500/25 text-red-100 z-30" : "bg-zinc-900 text-zinc-100 border-zinc-800 hover:brightness-125 z-10"}`}>
+                            className={`pointer-events-auto ${m.locked ? "cursor-not-allowed" : "cursor-move"} overflow-hidden px-2 py-1 text-[11px] leading-tight border-l-4 border-y border-r rounded-sm ${isBad ? "border-red-500 bg-red-500/25 text-red-100 z-30" : "bg-zinc-900 text-zinc-100 border-zinc-800 hover:brightness-125 z-10"}`}>
                             <div className="flex items-center justify-between gap-1">
-                              <span className="font-bold">{fmt12(s)}</span>
+                              <span className="font-bold flex items-center gap-1">{m.locked && <Lock className="w-3 h-3 text-lime-400" />}{fmt12(s)}</span>
                               <span className="text-[9px] uppercase tracking-wide truncate" style={{ color: isBad ? undefined : col }}>{catName(m.category_id)}</span>
                             </div>
                             <div className="truncate">{names[m.home_id] || "?"} <span className="text-zinc-500">v</span> {names[m.away_id] || "?"}</div>

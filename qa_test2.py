@@ -42,6 +42,13 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
                     if s < 16 * 60 and 15 * 60 < s + dur:
                         clash.append((d["cat"]["name"], m["id"], m["time"]))
         check(sec, "scheduler worked around the locked anchor", not clash, clash)
+        # moving a locked match via the API must be rejected (Board drag protection, backend side)
+        r = api("PUT", f"/matches/{m0['id']}", json={"date": "2026-09-05", "time": "10:00",
+                                                    "ground_id": GC["g"][2]})
+        ml = next(m for m in jget(f"/categories/{GC['u13']}/matches") if m["id"] == m0["id"])
+        check(sec, "moving a locked match via API rejected (409) and slot unchanged",
+              r.status_code == 409 and (ml["date"], ml["time"]) == ("2026-09-06", "15:00"),
+              (r.status_code, ml["date"], ml["time"]))
         GC["locked_id"] = m0["id"]
 
     # ============================================================ 5. U-13 RESULTS + STANDINGS RECOMPUTE
@@ -219,10 +226,10 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     api("PUT", f"/matches/{m0['id']}", json={"home_score": 2})
     mm = next(m for m in jget(f"/categories/{GC['u23']}/matches") if m["id"] == m0["id"])
     check(sec, "half-entered score does NOT mark match completed", mm["status"] != "completed", mm["status"])
-    # explicit None away with home set (frontend never does this; API allows it?)
+    # explicit None away with home set must NOT complete the match
     api("PUT", f"/matches/{m0['id']}", json={"home_score": 2, "away_score": None})
     mm = next(m for m in jget(f"/categories/{GC['u23']}/matches") if m["id"] == m0["id"])
-    info(sec, "home=2 away=None => status", mm["status"] + " (completed here would be a validation gap)")
+    check(sec, "home=2 away=None does NOT mark match completed", mm["status"] != "completed", mm["status"])
     # proper result
     api("PUT", f"/matches/{m0['id']}", json={"home_score": 2, "away_score": 0, "status": "completed"})
     nm = next(m for m in jget(f"/categories/{GC['u23']}/matches") if m["id"] == m0["next_match_id"])
@@ -410,12 +417,20 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     ids = [mk_team(cid, f"X{i}") for i in range(4)]
     r = api("POST", f"/categories/{cid}/generate-fixtures")
     check(sec, "fixtures ok", r.status_code == 200)
-    # delete a team that has fixtures
-    api("DELETE", f"/teams/{ids[0]}")
+    # delete a team that has fixtures: must be blocked (409) OR cascade — never orphan
+    r = api("DELETE", f"/teams/{ids[0]}")
     ms = jget(f"/categories/{cid}/matches")
     orphan = [m["id"] for m in ms if ids[0] in (m.get("home_id"), m.get("away_id"))]
-    check(sec, "deleting a team does not leave orphaned fixtures", not orphan,
-          f"{len(orphan)} matches still reference the deleted team (dangling team_id)")
+    team_alive = any(t["id"] == ids[0] for t in jget(f"/categories/{cid}/teams"))
+    check(sec, "team deletion with fixtures is safe (409-blocked or cascaded, no orphans)",
+          (r.status_code == 409 and team_alive) or (r.status_code == 200 and not orphan),
+          f"status={r.status_code}, team_alive={team_alive}, orphans={len(orphan)}")
+    # deleting a fixture-free team still works
+    r = api("DELETE", f"/teams/{ids[0]}")  # still blocked
+    api("DELETE", f"/categories/{cid}/matches")   # clear fixtures
+    r = api("DELETE", f"/teams/{ids[0]}")
+    check(sec, "team deletion works once fixtures are cleared", r.status_code == 200, r.status_code)
+    api("POST", f"/categories/{cid}/generate-fixtures")  # regenerate (3 teams left)
     # <2 teams guard
     cid2 = mk_cat(t, "X2", "league_single", {}, [g])
     mk_team(cid2, "lonely")
@@ -424,14 +439,21 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     # team into nonexistent category
     r = api("POST", "/categories/does-not-exist/teams", json={"name": "ghost"})
     check(sec, "team into missing category -> 404", r.status_code == 404, r.status_code)
-    # arbitrary junk into match update (no validation model)
+    # arbitrary junk into match update must be rejected outright
     ms = jget(f"/categories/{cid}/matches")
     r = api("PUT", f"/matches/{ms[0]['id']}", json={"tournament_id": "HIJACKED", "junk_field": 1,
                                                     "date": "not-a-date"})
     m = next(x for x in jget(f"/categories/{cid}/matches") if x["id"] == ms[0]["id"])
-    check(sec, "PUT /matches rejects junk / protected fields", not (
-        m.get("tournament_id") == "HIJACKED" or "junk_field" in m or m.get("date") == "not-a-date"),
-        f"stored: tournament_id={m.get('tournament_id')}, junk_field={'junk_field' in m}, date={m.get('date')}")
+    check(sec, "PUT /matches rejects junk / protected fields",
+          r.status_code in (400, 409, 422) and not (
+              m.get("tournament_id") == "HIJACKED" or "junk_field" in m or m.get("date") == "not-a-date"),
+          f"status={r.status_code}, stored: tournament_id={m.get('tournament_id')}, "
+          f"junk_field={'junk_field' in m}, date={m.get('date')}")
+    # malformed date/time alone also rejected
+    r = api("PUT", f"/matches/{ms[0]['id']}", json={"date": "05-09-2026"})
+    check(sec, "malformed date rejected", r.status_code == 422, r.status_code)
+    r = api("PUT", f"/matches/{ms[0]['id']}", json={"time": "9pm"})
+    check(sec, "malformed time rejected", r.status_code == 422, r.status_code)
     # delete category cascades matches+teams
     api("DELETE", f"/categories/{cid}")
     left = jget(f"/categories/{cid}/matches")
