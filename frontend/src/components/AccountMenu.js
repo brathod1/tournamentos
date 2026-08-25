@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -19,8 +19,10 @@ export default function AccountMenu() {
   const [nu, setNu] = useState({ email: "", name: "", password: "", role: "organizer" });
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
 
-  const loadUsers = () => { if (isAdmin) api.listUsers().then(setUsers).catch(() => {}); };
-  useEffect(() => { if (open) loadUsers(); /* eslint-disable-next-line */ }, [open, isAdmin]);
+  const loadUsers = useCallback(() => {
+    if (isAdmin) api.listUsers().then(setUsers).catch(() => {});
+  }, [isAdmin]);
+  useEffect(() => { if (open) loadUsers(); }, [open, loadUsers]);
 
   if (!canEdit) {
     return (
