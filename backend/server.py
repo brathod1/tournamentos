@@ -667,6 +667,21 @@ async def _assign_and_persist_referees(tid: str):
     return assigned, len(unassigned), conflicts
 
 
+def _is_schedulable(m):
+    """Which matches the scheduler may place.
+
+    Knockout matches are included even before their teams are known — an organizer
+    needs to publish "Semi-Final, Sunday 17:00, Ground 1" ahead of the group results.
+    Team-specific rules (rest, availability, per-day caps) simply don't apply while the
+    slot is still TBD; once seeded, the conflict panel flags anything that no longer fits.
+    """
+    if m.get("locked") or m.get("status") == "bye":
+        return False
+    if m.get("home_id") and m.get("away_id"):
+        return True
+    return m.get("stage") == "knockout"
+
+
 def _split_targets(schedulable, allm, replan):
     """Decide what the scheduler may move.
 
@@ -706,7 +721,7 @@ async def do_schedule(cid: str, replan: bool = False, user: dict = Depends(requi
     teams = await db.teams.find({"category_id": cid}, {"_id": 0}).to_list(5000)
     ti = build_team_info(teams)
     allm = await db.matches.find({"category_id": cid}, {"_id": 0}).to_list(10000)
-    schedulable = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
+    schedulable = [m for m in allm if _is_schedulable(m)]
     if not schedulable:
         raise HTTPException(400, "Generate fixtures before scheduling.")
     targets, locked = _split_targets(schedulable, allm, replan)
@@ -741,7 +756,7 @@ async def schedule_tournament_ep(tid: str, replan: bool = False, user: dict = De
         teams = await db.teams.find({"category_id": c["id"]}, {"_id": 0}).to_list(5000)
         ti = build_team_info(teams)
         allm = await db.matches.find({"category_id": c["id"]}, {"_id": 0}).to_list(10000)
-        schedulable = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
+        schedulable = [m for m in allm if _is_schedulable(m)]
         any_fixtures = any_fixtures or bool(schedulable)
         targets, locked = _split_targets(schedulable, allm, replan)
         items.append({"cat_id": c["id"], "cat_name": c.get("name"), "constraints": constraints,

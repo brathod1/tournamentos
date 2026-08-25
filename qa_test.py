@@ -624,8 +624,15 @@ def phase_schedule():
     ob = after[GC["ob"]]
     grp_placed = [m for m in ob["matches"] if m["stage"] == "group" and m.get("date")]
     ko_placed = [m for m in ob["matches"] if m["stage"] == "knockout" and m.get("date")]
-    check(sec, "OB knockout not scheduled before seeding (TBD matches unplaced)",
-          not ko_placed, [m["id"] for m in ko_placed][:5])
+    # Knockout slots are reserved up front so the bracket can be published before the
+    # group results are known — but they must still sit after the whole group stage.
+    check(sec, "knockout slots reserved even while teams are TBD", bool(ko_placed),
+          f"{len(ko_placed)} of 7 reserved")
+    if grp_placed and ko_placed:
+        grp_end = max((m["date"], parse_t(m["time"]) + 45) for m in grp_placed)
+        ko_start = min((m["date"], parse_t(m["time"])) for m in ko_placed)
+        check(sec, "reserved knockout slots start after the group stage ends",
+              ko_start >= grp_end, f"group ends {grp_end}, knockout starts {ko_start}")
     info(sec, "OB group placed", f"{len(grp_placed)}/12")
 
     # ---------- referee auto-assignment ----------

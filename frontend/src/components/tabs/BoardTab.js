@@ -14,6 +14,7 @@ const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 
 const fmt12 = (m) => { let h = Math.floor(m / 60); const mm = String(m % 60).padStart(2, "0"); const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12; return `${h}:${mm}${ap}`; };
 const parse = (s) => { const [a, b] = s.split(":"); return +a * 60 + +b; };
 const PALETTE = ["#a3e635", "#38bdf8", "#f472b6", "#fbbf24", "#c084fc", "#34d399", "#fb7185", "#22d3ee"];
+const ORD = { 1: "1st", 2: "2nd", 3: "3rd" };
 
 /** Every date in [start, end] inclusive, as YYYY-MM-DD. */
 const datesBetween = (start, end) => {
@@ -43,6 +44,13 @@ export default function BoardTab({ tid, categories }) {
 
   const colorFor = useCallback((cid) => PALETTE[Math.max(0, categories.findIndex((c) => c.id === cid)) % PALETTE.length], [categories]);
   const catName = useCallback((cid) => categories.find((c) => c.id === cid)?.name || "—", [categories]);
+  // A knockout slot may be reserved before its teams are known — show where the team
+  // will come from ("1st Group A") rather than a bare question mark.
+  const sideLabel = useCallback((id, source) => {
+    if (id) return names[id] || "?";
+    if (source) return `${ORD[source.pos] || `${source.pos}th`} ${source.group}`;
+    return "TBD";
+  }, [names]);
 
   const breakWindows = (() => {
     const seen = new Set(); const out = [];
@@ -246,7 +254,12 @@ export default function BoardTab({ tid, categories }) {
                               <span className="font-bold flex items-center gap-1">{m.locked && <Lock className="w-3 h-3 text-lime-400" />}{fmt12(s)}</span>
                               <span className="text-[9px] uppercase tracking-wide truncate" style={{ color: isBad ? undefined : col }}>{catName(m.category_id)}</span>
                             </div>
-                            <div className="truncate">{names[m.home_id] || "?"} <span className="text-zinc-500">v</span> {names[m.away_id] || "?"}</div>
+                            {m.stage === "knockout" && m.label && (
+                              <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{m.label}</div>
+                            )}
+                            <div className={`truncate ${!m.home_id && !m.away_id ? "text-zinc-500 italic" : ""}`}>
+                              {sideLabel(m.home_id, m.home_source)} <span className="text-zinc-500">v</span> {sideLabel(m.away_id, m.away_source)}
+                            </div>
                           </div>
                         );
                       })}

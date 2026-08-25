@@ -21,7 +21,16 @@ export default function ReportsTab({ tid, categories }) {
   }, [tid, categories]);
   useEffect(() => { load(); }, [load]);
 
+  const ORD = { 1: "1st", 2: "2nd", 3: "3rd" };
   const n = (id) => names[id] || (id ? "?" : "BYE");
+  // Knockout slots can be published before the teams are known.
+  const side = (m, which) => {
+    const id = m[`${which}_id`];
+    if (id) return names[id] || "?";
+    const src = m[`${which}_source`];
+    if (src) return `${ORD[src.pos] || `${src.pos}th`} ${src.group}`;
+    return m.stage === "knockout" ? "TBD" : "BYE";
+  };
   const catMap = {}; (categories || []).forEach((c) => (catMap[c.id] = c.name));
   const cat = (id) => catMap[id] || "—";
   const fmtTime = (t) => {
@@ -42,14 +51,14 @@ export default function ReportsTab({ tid, categories }) {
     n(a).localeCompare(n(b), undefined, { numeric: true, sensitivity: "base" }));
 
   const exportCSV = () => {
-    const rows = [["Date", "Time", "Category", "Home", "Away", "Ground", "Referee", "Score", "Status"]];
+    const rows = [["Date", "Time", "Category", "Home", "Away", "Ground", "Referee", "Score", "Status", "Stage"]];
     let ordered;
     if (view === "ground") {
       ordered = groundKeys.flatMap((gid) => [...byGround[gid]].sort(cmpTime));
     } else {
       ordered = [...schedule].sort(cmpTime);
     }
-    ordered.forEach((m) => rows.push([m.date, fmtTime(m.time), cat(m.category_id), n(m.home_id), n(m.away_id), n(m.ground_id), m.referee_id ? n(m.referee_id) : "", m.home_score != null ? `${m.home_score}-${m.away_score}` : "", m.status]));
+    ordered.forEach((m) => rows.push([m.date, fmtTime(m.time), cat(m.category_id), side(m, "home"), side(m, "away"), n(m.ground_id), m.referee_id ? n(m.referee_id) : "", m.home_score != null ? `${m.home_score}-${m.away_score}` : "", m.status, m.label || m.group || (m.round ? `Round ${m.round}` : "")]));
     const csv = rows.map((r) => r.map((c) => `"${c ?? ""}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = view === "ground" ? "schedule-by-ground.csv" : "schedule-by-time.csv"; a.click();
@@ -60,9 +69,9 @@ export default function ReportsTab({ tid, categories }) {
       <div className="col-span-2 text-zinc-500 font-display" data-testid={`report-time-${m.id}`}>
         {fmtTime(m.time)}{showDate && <span className="block text-xs text-zinc-500 mt-0.5">{m.date}</span>}
       </div>
-      <div className="col-span-4 text-right font-semibold truncate">{n(m.home_id)}</div>
+      <div className={`col-span-4 text-right font-semibold truncate ${m.home_id ? "" : "text-zinc-500 italic font-normal"}`}>{side(m, "home")}</div>
       <div className="col-span-1 text-center text-zinc-500">{m.home_score != null ? `${m.home_score}-${m.away_score}` : "v"}</div>
-      <div className="col-span-3 font-semibold truncate">{n(m.away_id)}</div>
+      <div className={`col-span-3 font-semibold truncate ${m.away_id ? "" : "text-zinc-500 italic font-normal"}`}>{side(m, "away")}</div>
       <div className="col-span-2 text-right text-xs text-zinc-600 truncate flex flex-col items-end gap-0.5">
         <span className="text-lime-400 uppercase tracking-wider" data-testid={`report-cat-${m.id}`}>{cat(m.category_id)}</span>
         {view !== "ground" && <span>{n(m.ground_id)}</span>}

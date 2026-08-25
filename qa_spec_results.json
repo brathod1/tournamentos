@@ -1,8 +1,8 @@
 {
- "ts": "2026-08-25T17:24:44.272906",
+ "ts": "2026-08-25T17:36:58.370589",
  "pass": 33,
  "fail": 0,
- "warn": 1,
+ "warn": 2,
  "results": [
   {
    "spec": 1,
@@ -20,13 +20,13 @@
    "spec": 2,
    "check": "tournament-wide auto-schedule succeeds",
    "status": "PASS",
-   "detail": "{\"scheduled\":43,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can play at most 6 \u2014 2 per day across the 3 day(s) it"
+   "detail": "{\"scheduled\":46,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can play at most 6 \u2014 2 per day across the 3 day(s) it"
   },
   {
    "spec": 2,
    "check": "scheduler result",
    "status": "INFO",
-   "detail": "43 scheduled / 2 unplaced across 3 categories"
+   "detail": "46 scheduled / 2 unplaced across 3 categories"
   },
   {
    "spec": 1,
@@ -134,7 +134,7 @@
    "spec": 18,
    "check": "explicit re-plan still rebuilds the whole schedule",
    "status": "PASS",
-   "detail": "{\"scheduled\":44,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can"
+   "detail": "{\"scheduled\":47,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can"
   },
   {
    "spec": 17,
@@ -146,19 +146,19 @@
    "spec": 5,
    "check": "matches per ground",
    "status": "INFO",
-   "detail": "{'1': 16, '2': 16, '3': 9, '4': 4}"
+   "detail": "{'1': 16, '2': 16, '3': 11, '4': 5}"
   },
   {
    "spec": 5,
    "check": "more than one ground actually used",
    "status": "PASS",
-   "detail": "{'1': 16, '2': 16, '3': 9, '4': 4}"
+   "detail": "{'1': 16, '2': 16, '3': 11, '4': 5}"
   },
   {
    "spec": 5,
    "check": "no single ground dominates (<50% of all matches)",
    "status": "PASS",
-   "detail": "busiest ground holds 36%"
+   "detail": "busiest ground holds 33%"
   },
   {
    "spec": 4,
@@ -176,7 +176,7 @@
    "spec": 6,
    "check": "ground utilisation within each day's span",
    "status": "INFO",
-   "detail": "59% busy, 1935 idle minutes"
+   "detail": "59% busy, 1965 idle minutes"
   },
   {
    "spec": 6,
@@ -198,15 +198,15 @@
   },
   {
    "spec": 16,
-   "check": "Youth Cup final",
-   "status": "INFO",
-   "detail": "not scheduled"
+   "check": "Youth Cup final sits late in its day",
+   "status": "WARN",
+   "detail": "final at 2026-10-04 11:00; 5 of 10 matches that day start later"
   },
   {
    "spec": 16,
    "check": "Seniors Knockout final sits late in its day",
    "status": "PASS",
-   "detail": "final at 2026-10-04 16:30; 1 of 7 matches that day start later"
+   "detail": "final at 2026-10-04 15:30; 1 of 10 matches that day start later"
   },
   {
    "spec": 19,
@@ -248,7 +248,7 @@
    "spec": 19,
    "check": "impossible tournament reports capacity + per-match reasons",
    "status": "PASS",
-   "detail": "{'unplaced_match', 'capacity'}"
+   "detail": "{'capacity', 'unplaced_match'}"
   },
   {
    "spec": 20,
@@ -272,7 +272,7 @@
    "spec": 0,
    "check": "schedule shape",
    "status": "INFO",
-   "detail": "45 matches over 3 day(s): ['2026-10-02', '2026-10-03', '2026-10-04']"
+   "detail": "48 matches over 3 day(s): ['2026-10-02', '2026-10-03', '2026-10-04']"
   },
   {
    "spec": 0,
@@ -290,7 +290,7 @@
    "spec": 0,
    "check": "day 2026-10-04",
    "status": "INFO",
-   "detail": "7 matches, 08:00\u201318:00"
+   "detail": "10 matches, 08:00\u201317:45"
   }
  ]
 }
