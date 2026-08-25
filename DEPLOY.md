@@ -136,8 +136,26 @@ Give them the `organizer` role unless they also need to manage accounts.
 - **Deploying changes:** `git push` — Vercel and Render both rebuild automatically.
 - **Local development is unaffected:** your local `.env` files still point at localhost and
   your local MongoDB, so you can keep working without touching production.
-- **Backend asleep?** The first request after idle takes ~50 s on the free plan. Open the
-  site a minute before you need it, or upgrade to Starter.
+## Living with the free tier (no cost at all)
+
+The only real limitation is that Render's free backend sleeps after ~15 minutes of no traffic,
+so the next visitor waits ~50 seconds while it wakes. It never sleeps *during* use — once
+organizers are entering scores, traffic keeps it awake all day. Two ways to handle it:
+
+**1. Warm it up before you need it (simplest).**
+Open the site — or just `https://<your-api>.onrender.com/api/` — about two minutes before a
+session starts. From then on continued use keeps it up. Fine for tournament day.
+
+**2. Keep it awake automatically with a free pinger.**
+Sign up at <https://cron-job.org> (free), create a job that requests
+`https://<your-api>.onrender.com/api/` every 10 minutes. The backend then never sleeps.
+Caveat worth knowing: Render's free plan includes 750 instance-hours per month, and a
+permanently-awake service uses roughly all of them, so run the pinger during tournament
+periods rather than year-round.
+
+A good rhythm: leave it asleep normally, switch the pinger on the week of an event.
+
+- **Backend asleep?** See the section above — warm it up, or enable the pinger.
 
 ## Checks worth doing once live
 
