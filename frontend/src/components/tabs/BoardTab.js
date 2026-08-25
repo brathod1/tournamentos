@@ -3,6 +3,7 @@ import { api } from "../../lib/api";
 import { SectionTitle, Empty, Overline, groundLabel } from "../bits";
 import { LayoutGrid, AlertTriangle, CheckCircle2, Coffee, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "../../lib/auth";
 
 const DEFAULT_START = 6 * 60, DEFAULT_END = 22 * 60, STEP = 30, ROW_H = 56;
 const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -11,6 +12,7 @@ const parse = (s) => { const [a, b] = s.split(":"); return +a * 60 + +b; };
 const PALETTE = ["#a3e635", "#38bdf8", "#f472b6", "#fbbf24", "#c084fc", "#34d399", "#fb7185", "#22d3ee"];
 
 export default function BoardTab({ tid, categories }) {
+  const { canEdit } = useAuth();
   const [grounds, setGrounds] = useState([]);
   const [matches, setMatches] = useState([]);
   const [names, setNames] = useState({});
@@ -90,7 +92,7 @@ export default function BoardTab({ tid, categories }) {
   })();
 
   const onDrop = async (gid, t) => {
-    if (!drag) return;
+    if (!drag || !canEdit) return;
     const id = drag; setDrag(null);
     try {
       await api.updateMatch(id, { ground_id: gid, time: fmt(t), date });
@@ -147,7 +149,7 @@ export default function BoardTab({ tid, categories }) {
         ))}
         <span className="flex items-center gap-2 text-xs text-red-300"><span className="w-3 h-3 border-2 border-red-500 bg-red-500/20" />Conflict</span>
         <span className="flex items-center gap-2 text-xs text-amber-300"><span className="w-3 h-3 bg-[repeating-linear-gradient(45deg,#f59e0b33,#f59e0b33_3px,transparent_3px,transparent_6px)] border border-amber-500/40" />Break window</span>
-        <span className="flex items-center gap-2 text-xs text-zinc-500"><LayoutGrid className="w-3.5 h-3.5" />Drag a match to any slot</span>
+        {canEdit && <span className="flex items-center gap-2 text-xs text-zinc-500"><LayoutGrid className="w-3.5 h-3.5" />Drag a match to any slot</span>}
       </div>
 
       {dates.length === 0 ? (
@@ -183,8 +185,8 @@ export default function BoardTab({ tid, categories }) {
                         const col = colorFor(m.category_id);
                         const isBad = bad.has(m.id);
                         return (
-                          <div key={m.id} draggable={!m.locked}
-                            onDragStart={(e) => { if (m.locked) { e.preventDefault(); return; } setDrag(m.id); }}
+                          <div key={m.id} draggable={canEdit && !m.locked}
+                            onDragStart={(e) => { if (!canEdit || m.locked) { e.preventDefault(); return; } setDrag(m.id); }}
                             data-testid={`board-match-${m.id}`}
                             title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.referee_id ? ` · ref ${names[m.referee_id] || "?"}` : ""}${m.locked ? " · locked" : ""}`}
                             style={{
@@ -195,7 +197,7 @@ export default function BoardTab({ tid, categories }) {
                               width: `calc(${100 / cols}% - 4px)`,
                               ...(isBad ? {} : { borderLeftColor: col }),
                             }}
-                            className={`pointer-events-auto ${m.locked ? "cursor-not-allowed" : "cursor-move"} overflow-hidden px-2 py-1 text-[11px] leading-tight border-l-4 border-y border-r rounded-sm ${isBad ? "border-red-500 bg-red-500/25 text-red-100 z-30" : "bg-zinc-900 text-zinc-100 border-zinc-800 hover:brightness-125 z-10"}`}>
+                            className={`pointer-events-auto ${!canEdit ? "cursor-default" : m.locked ? "cursor-not-allowed" : "cursor-move"} overflow-hidden px-2 py-1 text-[11px] leading-tight border-l-4 border-y border-r rounded-sm ${isBad ? "border-red-500 bg-red-500/25 text-red-100 z-30" : "bg-zinc-900 text-zinc-100 border-zinc-800 hover:brightness-125 z-10"}`}>
                             <div className="flex items-center justify-between gap-1">
                               <span className="font-bold flex items-center gap-1">{m.locked && <Lock className="w-3 h-3 text-lime-400" />}{fmt12(s)}</span>
                               <span className="text-[9px] uppercase tracking-wide truncate" style={{ color: isBad ? undefined : col }}>{catName(m.category_id)}</span>

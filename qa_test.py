@@ -14,6 +14,9 @@ import requests
 
 BASE = "http://localhost:8001/api"
 S = requests.Session()
+ANON = requests.Session()          # never carries a token — used to probe the auth boundary
+QA_EMAIL = "qa-harness@example.com"
+QA_PASSWORD = "qa-harness-password-123"
 
 RESULTS = []          # list of {section, check, status, detail}
 CREATED_TOURS = []    # temp tournaments to clean up
@@ -34,6 +37,31 @@ def info(section, name, detail):
 def api(method, path, **kw):
     r = S.request(method, BASE + path, timeout=120, **kw)
     return r
+
+
+def anon(method, path, **kw):
+    """Request with no credentials at all."""
+    return ANON.request(method, BASE + path, timeout=60, **kw)
+
+
+def sign_in():
+    """Ensure the harness is authenticated; bootstraps the first admin if needed."""
+    st = jget("/auth/status")
+    if not st["initialized"]:
+        r = api("POST", "/auth/bootstrap", json={
+            "email": QA_EMAIL, "name": "QA Harness", "password": QA_PASSWORD, "role": "admin"})
+        r.raise_for_status()
+        token = r.json()["access_token"]
+    else:
+        r = api("POST", "/auth/login", json={"email": QA_EMAIL, "password": QA_PASSWORD})
+        if r.status_code != 200:
+            print("\n!! Could not sign in as the QA account.\n"
+                  f"   Create it in the app (email {QA_EMAIL}, password {QA_PASSWORD})\n"
+                  "   via Account -> Add Account, or edit QA_EMAIL/QA_PASSWORD at the top of this file.\n"
+                  f"   Server said: {r.status_code} {r.text[:200]}")
+            sys.exit(1)
+        token = r.json()["access_token"]
+    S.headers.update({"Authorization": f"Bearer {token}"})
 
 
 def jget(path):
@@ -97,6 +125,13 @@ def cleanup():
             api("DELETE", f"/tournaments/{tid}")
         except Exception:
             pass
+    # remove throwaway accounts created during auth checks (never the QA account itself)
+    try:
+        for u in jget("/auth/users"):
+            if u["email"] in ("weak@example.com", "x@y.com"):
+                api("DELETE", f"/auth/users/{u['id']}")
+    except Exception:
+        pass
 
 
 # ================================================================ 0. HEALTH
@@ -109,6 +144,76 @@ def phase_health():
         check(sec, "API root reachable", False, e)
         print("Backend not reachable — aborting.")
         sys.exit(1)
+    sign_in()
+    check(sec, "authenticated as QA account", "Authorization" in S.headers)
+
+
+# ================================================================ 0b. AUTH BOUNDARY
+def phase_auth():
+    """The security contract: reads are public, writes need a token, PII is protected."""
+    sec = "0b-auth"
+    me = jget("/auth/me")
+    check(sec, "/auth/me returns the signed-in user", me.get("email") == QA_EMAIL, me)
+    check(sec, "password hash never leaves the server", "password_hash" not in me, list(me))
+
+    # --- writes must be rejected without a token ---
+    probes = [
+        ("POST", "/tournaments", {"name": "HACK", "start_date": "2026-01-01"}),
+        ("DELETE", f"/tournaments/{GC.get('tid', 'x')}", None),
+        ("POST", f"/tournaments/{GC.get('tid', 'x')}/auto-schedule", None),
+        ("POST", f"/categories/{GC.get('u13', 'x')}/generate-fixtures", None),
+        ("DELETE", f"/categories/{GC.get('u13', 'x')}/matches", None),
+        ("POST", f"/tournaments/{GC.get('tid', 'x')}/grounds", {"name": "HACK"}),
+        ("POST", f"/tournaments/{GC.get('tid', 'x')}/referees", {"name": "HACK"}),
+    ]
+    bad = []
+    for method, path, body in probes:
+        r = anon(method, path, json=body) if body else anon(method, path)
+        if r.status_code != 401:
+            bad.append((method, path, r.status_code))
+    check(sec, "every write endpoint rejects anonymous callers with 401", not bad, bad)
+
+    # nothing was actually created by those probes
+    names = [t["name"] for t in anon("GET", "/tournaments").json()]
+    check(sec, "anonymous write attempts changed nothing", "HACK" not in names)
+
+    # --- public reads still work ---
+    for path in (f"/tournaments/{GC['tid']}", f"/tournaments/{GC['tid']}/categories",
+                 f"/tournaments/{GC['tid']}/schedule", f"/categories/{GC['u13']}/matches",
+                 f"/categories/{GC['u13']}/standings", f"/tournaments/{GC['tid']}/conflicts"):
+        r = anon("GET", path)
+        if not check(sec, f"public read works: {path.split('/')[-1]}", r.status_code == 200, r.status_code):
+            break
+
+    # --- PII is stripped for anonymous readers ---
+    a_refs = anon("GET", f"/tournaments/{GC['tid']}/referees").json()
+    s_refs = jget(f"/tournaments/{GC['tid']}/referees")
+    check(sec, "referee phone numbers hidden from anonymous readers",
+          all("phone" not in r for r in a_refs) and any("phone" in r for r in s_refs))
+    check(sec, "referee names still visible publicly (needed on fixture lists)",
+          all(r.get("name") for r in a_refs))
+    a_teams = anon("GET", f"/categories/{GC['u13']}/teams").json()
+    check(sec, "team contact details hidden from anonymous readers",
+          all("contact" not in t for t in a_teams))
+
+    # --- admin-only surface ---
+    check(sec, "user list requires auth", anon("GET", "/auth/users").status_code == 401)
+    r = anon("POST", "/auth/bootstrap", json={"email": "x@y.com", "name": "X", "password": "password123"})
+    check(sec, "bootstrap blocked once an account exists (409)", r.status_code == 409, r.status_code)
+
+    # --- token handling ---
+    bad_tok = requests.get(BASE + "/auth/me", headers={"Authorization": "Bearer not-a-real-token"}, timeout=30)
+    check(sec, "garbage token rejected with 401", bad_tok.status_code == 401, bad_tok.status_code)
+    r = api("POST", "/auth/login", json={"email": QA_EMAIL, "password": "wrong-password"})
+    check(sec, "wrong password rejected with 401", r.status_code == 401, r.status_code)
+    check(sec, "login error does not reveal whether the email exists",
+          "password" in r.text.lower() and "not found" not in r.text.lower(), r.text[:120])
+    r = api("POST", "/auth/login", json={"email": "nobody@example.com", "password": "whatever123"})
+    check(sec, "unknown email gives the same 401", r.status_code == 401, r.status_code)
+    r = api("POST", "/auth/users", json={"email": "weak@example.com", "name": "W", "password": "short"})
+    check(sec, "weak password rejected (422)", r.status_code == 422, r.status_code)
+    r = api("POST", "/auth/users", json={"email": "not-an-email", "name": "W", "password": "password123"})
+    check(sec, "malformed email rejected (422)", r.status_code == 422, r.status_code)
 
 
 # ================================================================ 1. BUILD GRAND CHAMPIONSHIP
@@ -541,6 +646,7 @@ if __name__ == "__main__":
     try:
         phase_health()
         phase_build()
+        phase_auth()
         phase_fixtures()
         phase_schedule()
         # part 2 continues in qa_test2 (imported to keep files manageable)

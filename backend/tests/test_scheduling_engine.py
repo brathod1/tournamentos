@@ -43,6 +43,46 @@ def _load_base():
 
 BASE = _load_base()
 
+# ---------------------------------------------------------------- test account
+# Writes require authentication. The suite signs in (bootstrapping the first admin on
+# an empty database) and patches requests.* so existing calls carry the token.
+TEST_EMAIL = os.environ.get("QA_EMAIL", "qa-harness@example.com")
+TEST_PASSWORD = os.environ.get("QA_PASSWORD", "qa-harness-password-123")
+
+
+def _auth_header():
+    st = requests.get(f"{BASE}/auth/status", timeout=30).json()
+    if not st.get("initialized"):
+        r = requests.post(f"{BASE}/auth/bootstrap", timeout=30, json={
+            "email": TEST_EMAIL, "name": "QA Harness", "password": TEST_PASSWORD, "role": "admin"})
+    else:
+        r = requests.post(f"{BASE}/auth/login", timeout=30,
+                          json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"Could not authenticate as {TEST_EMAIL}: {r.status_code} {r.text[:200]}. "
+            "Create that account in the app, or set QA_EMAIL / QA_PASSWORD.")
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+_AUTH = _auth_header()
+_raw_request = requests.api.request
+
+
+def _authed_request(method, url, **kwargs):
+    """Attach the bearer token to every call this module makes to our API."""
+    if isinstance(url, str) and url.startswith(BASE):
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers.setdefault("Authorization", _AUTH["Authorization"])
+        kwargs["headers"] = headers
+    return _raw_request(method, url, **kwargs)
+
+
+# requests.api.get/post/... resolve `request` from their own module globals at call
+# time, so patching this one name covers every helper the tests use.
+requests.api.request = _authed_request
+requests.request = _authed_request
+
 
 def _parse(t):
     h, m = t.split(":")

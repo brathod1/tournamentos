@@ -3,7 +3,46 @@ import axios from "axios";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const http = axios.create({ baseURL: API });
 
+// ---------------------------------------------------------------- auth token
+const TOKEN_KEY = "tos_token";
+export const getToken = () => {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+};
+export const setToken = (t) => {
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch { /* private mode */ }
+};
+
+// Attach the bearer token to every request when signed in.
+http.interceptors.request.use((cfg) => {
+  const t = getToken();
+  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  return cfg;
+});
+
+// A rejected/expired token signs the user out so the UI drops to read-only
+// instead of repeatedly failing with a stale session.
+let onUnauthorized = () => {};
+export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+http.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const status = err.response?.status;
+    const isLoginAttempt = (err.config?.url || "").includes("/auth/login");
+    if (status === 401 && !isLoginAttempt && getToken()) { setToken(null); onUnauthorized(); }
+    return Promise.reject(err);
+  }
+);
+
 export const api = {
+  // auth
+  authStatus: () => http.get("/auth/status").then((r) => r.data),
+  bootstrap: (d) => http.post("/auth/bootstrap", d).then((r) => r.data),
+  login: (d) => http.post("/auth/login", d).then((r) => r.data),
+  me: () => http.get("/auth/me").then((r) => r.data),
+  changePassword: (d) => http.post("/auth/change-password", d).then((r) => r.data),
+  listUsers: () => http.get("/auth/users").then((r) => r.data),
+  createUser: (d) => http.post("/auth/users", d).then((r) => r.data),
+  deleteUser: (id) => http.delete(`/auth/users/${id}`).then((r) => r.data),
   // tournaments
   listTournaments: () => http.get("/tournaments").then((r) => r.data),
   getTournament: (id) => http.get(`/tournaments/${id}`).then((r) => r.data),

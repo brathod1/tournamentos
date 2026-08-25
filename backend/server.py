@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 
 from scheduling import (generate_matches, auto_schedule, detect_conflicts, compute_standings,
                         schedule_matches, dates_in_range, detect_all_conflicts, assign_referees)
+from auth import (User, LoginRequest, CreateUserRequest, ChangePasswordRequest,
+                  hash_password, verify_password, create_token, normalize_email,
+                  public_user, make_auth_deps, strip_pii, TOKEN_TTL_HOURS)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -23,6 +26,12 @@ db = client[os.environ['DB_NAME']]
 
 app = FastAPI(title="TournamentOS")
 api_router = APIRouter(prefix="/api")
+
+# Auth dependencies (bound to this app's db handle).
+#   current_user_optional -> dict | None   (public reads; decides PII visibility)
+#   require_user          -> dict          (every write)
+#   require_admin         -> dict          (user management)
+current_user_optional, require_user, require_admin = make_auth_deps(db)
 
 
 def now_iso():
@@ -165,14 +174,90 @@ async def get_or_404(coll, id, name="Resource"):
     return doc
 
 
-# --------------------------- TOURNAMENTS ---------------------------
+# --------------------------- AUTH ---------------------------
 @api_router.get("/")
 async def root():
     return {"message": "TournamentOS API", "status": "ok"}
 
 
+@api_router.get("/auth/status")
+async def auth_status():
+    """Used by the UI on first load: is any account set up yet?"""
+    n = await db.users.count_documents({})
+    return {"initialized": n > 0, "user_count": n, "token_ttl_hours": TOKEN_TTL_HOURS}
+
+
+@api_router.post("/auth/bootstrap")
+async def bootstrap_admin(body: CreateUserRequest):
+    """Create the very first admin. Only works while no accounts exist —
+    afterwards, accounts are created by an admin via /auth/users."""
+    if await db.users.count_documents({}) > 0:
+        raise HTTPException(409, "Already set up — ask an admin to create your account.")
+    u = User(email=normalize_email(body.email), name=body.name.strip() or "Admin",
+             role="admin", password_hash=hash_password(body.password))
+    await db.users.insert_one(u.model_dump())
+    doc = u.model_dump()
+    return {"access_token": create_token(doc), "token_type": "bearer", "user": public_user(doc)}
+
+
+@api_router.post("/auth/login")
+async def login(body: LoginRequest):
+    email = (body.email or "").strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    # Same message either way so we never reveal which emails exist.
+    if not user or not verify_password(body.password or "", user.get("password_hash", "")):
+        raise HTTPException(401, "Incorrect email or password.")
+    return {"access_token": create_token(user), "token_type": "bearer", "user": public_user(user)}
+
+
+@api_router.get("/auth/me")
+async def me(user: dict = Depends(require_user)):
+    return public_user(user)
+
+
+@api_router.post("/auth/change-password")
+async def change_password(body: ChangePasswordRequest, user: dict = Depends(require_user)):
+    if not verify_password(body.current_password or "", user.get("password_hash", "")):
+        raise HTTPException(401, "Current password is incorrect.")
+    await db.users.update_one({"id": user["id"]},
+                              {"$set": {"password_hash": hash_password(body.new_password)}})
+    return {"updated": True}
+
+
+@api_router.get("/auth/users")
+async def list_users(admin: dict = Depends(require_admin)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", 1).to_list(1000)
+    return users
+
+
+@api_router.post("/auth/users")
+async def create_user(body: CreateUserRequest, admin: dict = Depends(require_admin)):
+    email = normalize_email(body.email)
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(409, "An account with that email already exists.")
+    role = body.role if body.role in ("admin", "organizer") else "organizer"
+    u = User(email=email, name=body.name.strip() or email, role=role,
+             password_hash=hash_password(body.password))
+    await db.users.insert_one(u.model_dump())
+    return public_user(u.model_dump())
+
+
+@api_router.delete("/auth/users/{uid}")
+async def delete_user(uid: str, admin: dict = Depends(require_admin)):
+    if uid == admin["id"]:
+        raise HTTPException(409, "You cannot delete your own account.")
+    target = await get_or_404(db.users, uid, "User")
+    if target.get("role") == "admin" and await db.users.count_documents({"role": "admin"}) <= 1:
+        raise HTTPException(409, "Cannot delete the last admin account.")
+    await db.users.delete_one({"id": uid})
+    return {"deleted": True}
+
+
+# --------------------------- TOURNAMENTS ---------------------------
+
+
 @api_router.post("/tournaments", response_model=Tournament)
-async def create_tournament(t: Tournament):
+async def create_tournament(t: Tournament, user: dict = Depends(require_user)):
     await db.tournaments.insert_one(t.model_dump())
     return t
 
@@ -192,14 +277,14 @@ async def get_tournament(tid: str):
 
 
 @api_router.put("/tournaments/{tid}")
-async def update_tournament(tid: str, data: Dict[str, Any]):
+async def update_tournament(tid: str, data: Dict[str, Any], user: dict = Depends(require_user)):
     data.pop("id", None); data.pop("_id", None)
     await db.tournaments.update_one({"id": tid}, {"$set": data})
     return await get_or_404(db.tournaments, tid, "Tournament")
 
 
 @api_router.delete("/tournaments/{tid}")
-async def delete_tournament(tid: str):
+async def delete_tournament(tid: str, user: dict = Depends(require_user)):
     await db.tournaments.delete_one({"id": tid})
     for c in ("categories", "teams", "grounds", "referees", "matches"):
         await db[c].delete_many({"tournament_id": tid})
@@ -208,7 +293,7 @@ async def delete_tournament(tid: str):
 
 # --------------------------- CATEGORIES ---------------------------
 @api_router.post("/tournaments/{tid}/categories", response_model=Category)
-async def create_category(tid: str, c: Category):
+async def create_category(tid: str, c: Category, user: dict = Depends(require_user)):
     c.tournament_id = tid
     await db.categories.insert_one(c.model_dump())
     return c
@@ -229,14 +314,14 @@ async def get_category(cid: str):
 
 
 @api_router.put("/categories/{cid}")
-async def update_category(cid: str, data: Dict[str, Any]):
+async def update_category(cid: str, data: Dict[str, Any], user: dict = Depends(require_user)):
     data.pop("id", None); data.pop("_id", None)
     await db.categories.update_one({"id": cid}, {"$set": data})
     return await get_or_404(db.categories, cid, "Category")
 
 
 @api_router.delete("/categories/{cid}")
-async def delete_category(cid: str):
+async def delete_category(cid: str, user: dict = Depends(require_user)):
     await db.categories.delete_one({"id": cid})
     await db.teams.delete_many({"category_id": cid})
     await db.matches.delete_many({"category_id": cid})
@@ -245,7 +330,7 @@ async def delete_category(cid: str):
 
 # --------------------------- TEAMS ---------------------------
 @api_router.post("/categories/{cid}/teams", response_model=Team)
-async def create_team(cid: str, t: Team):
+async def create_team(cid: str, t: Team, user: dict = Depends(require_user)):
     cat = await get_or_404(db.categories, cid, "Category")
     t.category_id = cid
     t.tournament_id = cat["tournament_id"]
@@ -254,19 +339,20 @@ async def create_team(cid: str, t: Team):
 
 
 @api_router.get("/categories/{cid}/teams")
-async def list_teams(cid: str):
-    return await db.teams.find({"category_id": cid}, {"_id": 0}).sort("created_at", 1).to_list(5000)
+async def list_teams(cid: str, user: Optional[dict] = Depends(current_user_optional)):
+    teams = await db.teams.find({"category_id": cid}, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    return strip_pii(teams, keep=bool(user))
 
 
 @api_router.put("/teams/{tid}")
-async def update_team(tid: str, data: Dict[str, Any]):
+async def update_team(tid: str, data: Dict[str, Any], user: dict = Depends(require_user)):
     data.pop("id", None); data.pop("_id", None)
     await db.teams.update_one({"id": tid}, {"$set": data})
     return await get_or_404(db.teams, tid, "Team")
 
 
 @api_router.delete("/teams/{tid}")
-async def delete_team(tid: str):
+async def delete_team(tid: str, user: dict = Depends(require_user)):
     team = await get_or_404(db.teams, tid, "Team")
     n = await db.matches.count_documents({
         "category_id": team["category_id"],
@@ -281,7 +367,7 @@ async def delete_team(tid: str):
 
 # --------------------------- GROUNDS ---------------------------
 @api_router.post("/tournaments/{tid}/grounds", response_model=Ground)
-async def create_ground(tid: str, g: Ground):
+async def create_ground(tid: str, g: Ground, user: dict = Depends(require_user)):
     g.tournament_id = tid
     await db.grounds.insert_one(g.model_dump())
     return g
@@ -293,47 +379,49 @@ async def list_grounds(tid: str):
 
 
 @api_router.put("/grounds/{gid}")
-async def update_ground(gid: str, data: Dict[str, Any]):
+async def update_ground(gid: str, data: Dict[str, Any], user: dict = Depends(require_user)):
     data.pop("id", None); data.pop("_id", None)
     await db.grounds.update_one({"id": gid}, {"$set": data})
     return await get_or_404(db.grounds, gid, "Ground")
 
 
 @api_router.delete("/grounds/{gid}")
-async def delete_ground(gid: str):
+async def delete_ground(gid: str, user: dict = Depends(require_user)):
     await db.grounds.delete_one({"id": gid})
     return {"deleted": True}
 
 
 # --------------------------- REFEREES ---------------------------
 @api_router.post("/tournaments/{tid}/referees", response_model=Referee)
-async def create_referee(tid: str, r: Referee):
+async def create_referee(tid: str, r: Referee, user: dict = Depends(require_user)):
     r.tournament_id = tid
     await db.referees.insert_one(r.model_dump())
     return r
 
 
 @api_router.get("/tournaments/{tid}/referees")
-async def list_referees(tid: str):
-    return await db.referees.find({"tournament_id": tid}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+async def list_referees(tid: str, user: Optional[dict] = Depends(current_user_optional)):
+    refs = await db.referees.find({"tournament_id": tid}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    return strip_pii(refs, keep=bool(user))
 
 
 @api_router.put("/referees/{rid}")
-async def update_referee(rid: str, data: Dict[str, Any]):
+async def update_referee(rid: str, data: Dict[str, Any], user: dict = Depends(require_user)):
     data.pop("id", None); data.pop("_id", None)
     await db.referees.update_one({"id": rid}, {"$set": data})
     return await get_or_404(db.referees, rid, "Referee")
 
 
 @api_router.delete("/referees/{rid}")
-async def delete_referee(rid: str):
+async def delete_referee(rid: str, user: dict = Depends(require_user)):
     await db.referees.delete_one({"id": rid})
+    await db.matches.update_many({"referee_id": rid}, {"$set": {"referee_id": None}})
     return {"deleted": True}
 
 
 # --------------------------- FIXTURES / MATCHES ---------------------------
 @api_router.post("/categories/{cid}/generate-fixtures")
-async def gen_fixtures(cid: str):
+async def gen_fixtures(cid: str, user: dict = Depends(require_user)):
     cat = await get_or_404(db.categories, cid, "Category")
     teams = await db.teams.find({"category_id": cid}, {"_id": 0}).to_list(5000)
     if len(teams) < 2:
@@ -379,7 +467,7 @@ async def list_matches(cid: str):
 
 
 @api_router.put("/matches/{mid}")
-async def update_match(mid: str, upd: MatchUpdate):
+async def update_match(mid: str, upd: MatchUpdate, user: dict = Depends(require_user)):
     data = upd.model_dump(exclude_unset=True)
     if data.get("date") is not None and not DATE_RE.match(data["date"]):
         raise HTTPException(422, "date must be YYYY-MM-DD")
@@ -424,13 +512,13 @@ async def update_match(mid: str, upd: MatchUpdate):
 
 
 @api_router.delete("/categories/{cid}/matches")
-async def clear_matches(cid: str):
+async def clear_matches(cid: str, user: dict = Depends(require_user)):
     await db.matches.delete_many({"category_id": cid})
     return {"cleared": True}
 
 
 @api_router.post("/categories/{cid}/seed-knockout")
-async def seed_knockout(cid: str):
+async def seed_knockout(cid: str, user: dict = Depends(require_user)):
     cat = await get_or_404(db.categories, cid, "Category")
     if cat.get("format") != "groups_knockout":
         raise HTTPException(400, "Seeding is only available for the Groups + Knockout format.")
@@ -521,7 +609,7 @@ async def _category_grounds(cat):
 
 
 @api_router.post("/categories/{cid}/auto-schedule")
-async def do_schedule(cid: str):
+async def do_schedule(cid: str, user: dict = Depends(require_user)):
     cat = await get_or_404(db.categories, cid, "Category")
     tour = await get_or_404(db.tournaments, cat["tournament_id"], "Tournament")
     constraints = {**DEFAULT_CONSTRAINTS, **(cat.get("constraints") or {})}
@@ -553,7 +641,7 @@ async def do_schedule(cid: str):
 
 
 @api_router.post("/tournaments/{tid}/auto-schedule")
-async def schedule_tournament_ep(tid: str):
+async def schedule_tournament_ep(tid: str, user: dict = Depends(require_user)):
     tour = await get_or_404(db.tournaments, tid, "Tournament")
     start = tour.get("start_date"); end = tour.get("end_date") or start
     if not start:
@@ -588,7 +676,7 @@ async def schedule_tournament_ep(tid: str):
 
 
 @api_router.post("/tournaments/{tid}/assign-referees")
-async def assign_referees_ep(tid: str):
+async def assign_referees_ep(tid: str, user: dict = Depends(require_user)):
     """Re-run referee assignment over the current schedule without rescheduling anything."""
     await get_or_404(db.tournaments, tid, "Tournament")
     assigned, unassigned, conflicts = await _assign_and_persist_referees(tid)
@@ -649,10 +737,14 @@ async def full_schedule(tid: str):
 
 
 app.include_router(api_router)
+
+# CORS: '*' is fine for local dev. In production set CORS_ORIGINS to your exact frontend
+# origin(s), comma-separated — e.g. "https://tournamentos.vercel.app".
+_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=_origins != ["*"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

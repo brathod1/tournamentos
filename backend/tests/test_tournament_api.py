@@ -9,10 +9,29 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001").rstr
 API = f"{BASE_URL}/api"
 
 
+TEST_EMAIL = os.environ.get("QA_EMAIL", "qa-harness@example.com")
+TEST_PASSWORD = os.environ.get("QA_PASSWORD", "qa-harness-password-123")
+
+
+def _token():
+    """Sign in (bootstrapping the first admin on an empty database) for write access."""
+    st = requests.get(f"{API}/auth/status", timeout=30).json()
+    if not st.get("initialized"):
+        r = requests.post(f"{API}/auth/bootstrap", timeout=30, json={
+            "email": TEST_EMAIL, "name": "QA Harness", "password": TEST_PASSWORD, "role": "admin"})
+    else:
+        r = requests.post(f"{API}/auth/login", timeout=30,
+                          json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
+    if r.status_code != 200:
+        raise RuntimeError(f"Could not authenticate as {TEST_EMAIL}: {r.status_code} {r.text[:200]}")
+    return r.json()["access_token"]
+
+
 @pytest.fixture(scope="module")
 def session():
     s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
+    s.headers.update({"Content-Type": "application/json",
+                      "Authorization": f"Bearer {_token()}"})
     return s
 
 

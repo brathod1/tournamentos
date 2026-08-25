@@ -7,8 +7,10 @@ import { SectionTitle, Empty, Overline } from "../bits";
 import { CategoryPicker } from "../../pages/TournamentDetail";
 import { CalendarDays, Zap, Lock, LockOpen, Trophy } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth, CanEdit } from "../../lib/auth";
 
 export default function FixturesTab({ tid, categories, activeCat, setActiveCat, reload }) {
+  const { canEdit } = useAuth();
   const [matches, setMatches] = useState([]);
   const [teams, setTeams] = useState([]);
   const [grounds, setGrounds] = useState([]);
@@ -55,6 +57,7 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
       <SectionTitle sub={cat ? cat.name : "Select a category"} title="Fixtures" right={
         <div className="flex gap-3 items-center">
           <CategoryPicker categories={categories} value={activeCat} onChange={setActiveCat} />
+          <CanEdit>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button data-testid="generate-fixtures-btn" disabled={!activeCat} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider gap-2"><Zap className="w-4 h-4" />Generate</Button>
@@ -65,12 +68,13 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
               <AlertDialogFooter><AlertDialogCancel className="rounded-none bg-zinc-800 border-zinc-700 hover:bg-zinc-700">Cancel</AlertDialogCancel><AlertDialogAction data-testid="confirm-generate-btn" onClick={generate} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase">Generate</AlertDialogAction></AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          </CanEdit>
         </div>} />
 
       {matches.length === 0 ? (
         <Empty icon={CalendarDays} title="No fixtures generated" hint={teams.length < 2 ? "Add at least 2 teams to this category first." : "Click Generate to build the fixture list from your chosen format."} />
       ) : isKO ? (
-        <Bracket matches={matches} tname={tname} setScore={setScore} />
+        <Bracket matches={matches} tname={tname} setScore={setScore} canEdit={canEdit} />
       ) : (
         <div className="space-y-10">
           <div className="space-y-8">
@@ -78,7 +82,7 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
               <div key={g}>
                 <Overline className="mb-3 text-lime-400 flex items-center gap-2">{g.startsWith("Group") ? <Trophy className="w-3.5 h-3.5" /> : null}{g}</Overline>
                 <div className="border border-zinc-800 divide-y divide-zinc-800">
-                  {ms.map((m) => <MatchRow key={m.id} m={m} tname={tname} gname={gname} setScore={setScore} toggleLock={toggleLock} />)}
+                  {ms.map((m) => <MatchRow key={m.id} m={m} tname={tname} gname={gname} setScore={setScore} toggleLock={toggleLock} canEdit={canEdit} />)}
                 </div>
               </div>
             ))}
@@ -87,9 +91,11 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
             <div>
               <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <Overline className="text-lime-400 flex items-center gap-2"><Trophy className="w-3.5 h-3.5" />Knockout Stage</Overline>
-                <Button data-testid="seed-knockout-btn" onClick={seed} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider gap-2 h-8 text-xs"><Zap className="w-3.5 h-3.5" />Seed from Group Standings</Button>
+                <CanEdit>
+                  <Button data-testid="seed-knockout-btn" onClick={seed} className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider gap-2 h-8 text-xs"><Zap className="w-3.5 h-3.5" />Seed from Group Standings</Button>
+                </CanEdit>
               </div>
-              <Bracket matches={koMatches} tname={tname} setScore={setScore} />
+              <Bracket matches={koMatches} tname={tname} setScore={setScore} canEdit={canEdit} />
             </div>
           )}
         </div>
@@ -98,7 +104,7 @@ export default function FixturesTab({ tid, categories, activeCat, setActiveCat, 
   );
 }
 
-function MatchRow({ m, tname, gname, setScore, toggleLock, ko }) {
+function MatchRow({ m, tname, gname, setScore, toggleLock, canEdit }) {
   const bye = m.status === "bye" || !m.away_id || !m.home_id;
   const [home, setHome] = useState(m.home_score ?? "");
   const [away, setAway] = useState(m.away_score ?? "");
@@ -113,26 +119,32 @@ function MatchRow({ m, tname, gname, setScore, toggleLock, ko }) {
     <div data-testid={`match-row-${m.id}`} className="grid grid-cols-12 gap-2 px-4 py-3 items-center hover:bg-zinc-900/40 transition-colors">
       <div className="col-span-5 text-right font-semibold truncate">{tname(m.home_id)}</div>
       <div className="col-span-2 flex items-center justify-center gap-1">
-        {bye ? <span className="text-xs text-zinc-600 uppercase tracking-widest">Bye</span> : (<>
-          <Input data-testid={`home-score-${m.id}`} value={home} onChange={(e) => setHome(e.target.value)} onBlur={commit}
-            className="w-11 h-9 text-center rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 p-0" />
-          <span className="text-zinc-600">:</span>
-          <Input data-testid={`away-score-${m.id}`} value={away} onChange={(e) => setAway(e.target.value)} onBlur={commit}
-            className="w-11 h-9 text-center rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 p-0" />
-        </>)}
+        {bye ? <span className="text-xs text-zinc-600 uppercase tracking-widest">Bye</span>
+          : !canEdit ? (
+            <span className="font-display text-lg" data-testid={`score-${m.id}`}>
+              {m.home_score != null ? `${m.home_score}–${m.away_score}` : <span className="text-zinc-600 text-sm">v</span>}
+            </span>
+          ) : (<>
+            <Input data-testid={`home-score-${m.id}`} value={home} onChange={(e) => setHome(e.target.value)} onBlur={commit}
+              className="w-11 h-9 text-center rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 p-0" />
+            <span className="text-zinc-600">:</span>
+            <Input data-testid={`away-score-${m.id}`} value={away} onChange={(e) => setAway(e.target.value)} onBlur={commit}
+              className="w-11 h-9 text-center rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 p-0" />
+          </>)}
       </div>
       <div className="col-span-3 font-semibold truncate">{tname(m.away_id)}</div>
       <div className="col-span-2 flex items-center justify-end gap-3 text-xs text-zinc-500">
         {m.date && <span className="hidden lg:inline">{m.date} {m.time}</span>}
         {m.ground_id && gname(m.ground_id) && <span className="hidden xl:inline text-zinc-600">{gname(m.ground_id)}</span>}
-        {!bye && <button data-testid={`lock-match-${m.id}`} onClick={() => toggleLock(m)} className={m.locked ? "text-lime-400" : "text-zinc-600 hover:text-zinc-300"}>{m.locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}</button>}
+        {!bye && canEdit && <button data-testid={`lock-match-${m.id}`} onClick={() => toggleLock(m)} className={m.locked ? "text-lime-400" : "text-zinc-600 hover:text-zinc-300"}>{m.locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}</button>}
+        {!bye && !canEdit && m.locked && <Lock className="w-4 h-4 text-lime-400" />}
       </div>
     </div>
   );
 }
 
 
-function Bracket({ matches, tname, setScore }) {
+function Bracket({ matches, tname, setScore, canEdit }) {
   const containerRef = useRef(null);
   const refs = useRef({});
   const [lines, setLines] = useState([]);
@@ -174,7 +186,7 @@ function Bracket({ matches, tname, setScore }) {
           <div className="flex flex-col justify-around flex-1 gap-6">
             {rounds[r].slice().sort((a, b) => (a.bracket_pos ?? 0) - (b.bracket_pos ?? 0)).map((m) => (
               <div key={m.id} ref={(el) => { refs.current[m.id] = el; }}>
-                <BracketMatch m={m} tname={tname} setScore={setScore} />
+                <BracketMatch m={m} tname={tname} setScore={setScore} canEdit={canEdit} />
               </div>
             ))}
           </div>
@@ -187,7 +199,7 @@ function Bracket({ matches, tname, setScore }) {
 const ORD = { 1: "1st", 2: "2nd", 3: "3rd" };
 function srcLabel(s) { return s ? `${ORD[s.pos] || `${s.pos}th`} · ${s.group}` : "TBD"; }
 
-function BracketMatch({ m, tname, setScore }) {
+function BracketMatch({ m, tname, setScore, canEdit }) {
   const bye = m.status === "bye";
   const [home, setHome] = useState(m.home_score ?? "");
   const [away, setAway] = useState(m.away_score ?? "");
@@ -204,10 +216,12 @@ function BracketMatch({ m, tname, setScore }) {
   const Side = ({ id, source, winner, val, onCh, isBye }) => (
     <div className={`flex items-center justify-between px-3 py-2.5 gap-2 ${winner ? "text-lime-400 font-bold" : id ? "text-zinc-200" : "text-zinc-600"}`}>
       <span className="truncate text-sm">{id ? tname(id) : (isBye ? "BYE" : srcLabel(source))}</span>
-      {!bye && id && (
+      {!bye && id && (canEdit ? (
         <input value={val} onChange={onCh} onBlur={commit}
           className="w-9 h-7 text-center bg-zinc-950 border border-zinc-800 focus:border-lime-400 outline-none text-sm text-zinc-100" />
-      )}
+      ) : (
+        <span className="w-9 text-center text-sm font-display">{val !== "" ? val : "–"}</span>
+      ))}
     </div>
   );
   return (

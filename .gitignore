@@ -31,7 +31,11 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+# NOTE: backend/.env and frontend/.env hold local dev values only and are tracked
+# on purpose. Never put production secrets in them — use .env.example as the guide
+# and set real values as host environment variables.
+.env.production
+.env.local
 *token.json*
 *credentials.json*
 

@@ -1,0 +1,30 @@
+# Render blueprint for the TournamentOS backend.
+# Render can read this automatically ("Blueprint" deploy), or you can create the
+# service by hand with the same settings — see DEPLOY.md.
+services:
+  - type: web
+    name: tournamentos-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Render supplies $PORT; the app must bind to it rather than a fixed port.
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DB_NAME
+        value: tournamentos
+      # Generated once by Render and kept secret. Changing it signs everyone out.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TOKEN_TTL_HOURS
+        value: "12"
+      # Set these two in the Render dashboard (they contain your own values):
+      #   MONGO_URL     -> your MongoDB Atlas connection string
+      #   CORS_ORIGINS  -> your Vercel URL, e.g. https://tournamentos.vercel.app
+      - key: MONGO_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

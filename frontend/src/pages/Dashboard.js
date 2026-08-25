@@ -6,6 +6,8 @@ import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../components/ui/dialog";
 import { Overline, Empty, Labeled, ConfirmDelete } from "../components/bits";
+import { CanEdit } from "../lib/auth";
+import AccountMenu from "../components/AccountMenu";
 import { Trophy, Plus, MapPin, Users, Layers, Calendar, ArrowRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,7 +48,10 @@ export default function Dashboard() {
             <Overline className="mt-1">Operating System for Sport</Overline>
           </div>
         </div>
-        <NewTournamentDialog open={open} setOpen={setOpen} form={form} setForm={setForm} create={create} />
+        <div className="flex items-center gap-4">
+          <AccountMenu />
+          <CanEdit><NewTournamentDialog open={open} setOpen={setOpen} form={form} setForm={setForm} create={create} /></CanEdit>
+        </div>
       </header>
 
       <div className="relative overflow-hidden border border-zinc-800 mb-12">
@@ -72,13 +77,15 @@ export default function Dashboard() {
               className="group border border-zinc-800 bg-zinc-900/50 p-6 cursor-pointer transition-[transform,border-color] duration-200 hover:-translate-y-1 hover:border-lime-400/50">
               <div className="flex items-start justify-between">
                 <span className="text-[10px] uppercase tracking-[0.2em] px-2 py-1 bg-zinc-800 text-lime-400">{t.sport}</span>
-                <span onClick={(e) => e.stopPropagation()}>
-                  <ConfirmDelete title="Delete tournament?" testId={`confirm-delete-tournament-${t.id}`}
-                    description={`This permanently deletes "${t.name}" and every category, team, ground, referee and match inside it. This cannot be undone.`}
-                    onConfirm={() => remove(t.id)}>
-                    <button data-testid={`delete-tournament-${t.id}`} className="text-zinc-600 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
-                  </ConfirmDelete>
-                </span>
+                <CanEdit>
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <ConfirmDelete title="Delete tournament?" testId={`confirm-delete-tournament-${t.id}`}
+                      description={`This permanently deletes "${t.name}" and every category, team, ground, referee and match inside it. This cannot be undone.`}
+                      onConfirm={() => remove(t.id)}>
+                      <button data-testid={`delete-tournament-${t.id}`} className="text-zinc-600 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                    </ConfirmDelete>
+                  </span>
+                </CanEdit>
               </div>
               <h3 className="font-display text-2xl font-bold uppercase tracking-tight mt-4 leading-tight group-hover:text-lime-400 transition-colors">{t.name}</h3>
               {t.location && <div className="flex items-center gap-1.5 text-sm text-zinc-500 mt-2"><MapPin className="w-3.5 h-3.5" />{t.location}</div>}

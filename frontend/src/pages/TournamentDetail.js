@@ -9,6 +9,8 @@ import { Button } from "../components/ui/button";
 import { Overline, Stat, Labeled } from "../components/bits";
 import { Trophy, ChevronLeft, MapPin, Calendar, Pencil } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth, CanEdit } from "../lib/auth";
+import AccountMenu from "../components/AccountMenu";
 import CategoriesTab from "../components/tabs/CategoriesTab";
 import TeamsTab from "../components/tabs/TeamsTab";
 import VenuesTab from "../components/tabs/VenuesTab";
@@ -19,6 +21,9 @@ import ReportsTab from "../components/tabs/ReportsTab";
 import BoardTab from "../components/tabs/BoardTab";
 
 const TABS = ["overview", "categories", "teams", "venues", "fixtures", "schedule", "board", "standings", "reports"];
+// Setup/planning tabs are only meaningful to signed-in organizers; visitors get the
+// read-only views (what's happening, where, and who's winning).
+const PUBLIC_TABS = ["overview", "fixtures", "board", "standings", "reports"];
 const LABELS = { overview: "Overview", categories: "Categories", teams: "Teams", venues: "Grounds & Referees", fixtures: "Fixtures", schedule: "Schedule", board: "Board", standings: "Standings", reports: "Reports" };
 
 export function CategoryPicker({ categories, value, onChange }) {
@@ -37,6 +42,7 @@ export function CategoryPicker({ categories, value, onChange }) {
 export default function TournamentDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { canEdit } = useAuth();
   const [tour, setTour] = useState(null);
   const [categories, setCategories] = useState([]);
   const [tab, setTab] = useState("overview");
@@ -59,6 +65,12 @@ export default function TournamentDetail() {
   }), [id]);
 
   useEffect(() => { api.getTournament(id).then(setTour); loadCats(); }, [id, loadCats]);
+  // Signing out while on an organizer-only tab drops back to a public one.
+  useEffect(() => {
+    if (!canEdit && !PUBLIC_TABS.includes(tab)) setTab("overview");
+  }, [canEdit, tab]);
+
+  const visibleTabs = canEdit ? TABS : TABS.filter((t) => PUBLIC_TABS.includes(t));
 
   if (!tour) return <div className="p-10 text-zinc-500">Loading…</div>;
   const totalTeams = categories.reduce((s, c) => s + (c.team_count || 0), 0);
@@ -79,14 +91,19 @@ export default function TournamentDetail() {
                 : <span className="flex items-center gap-1 text-amber-400"><Calendar className="w-3 h-3" />No dates set</span>}
             </div>
           </div>
-          <Button data-testid="edit-tournament-btn" onClick={openEdit} variant="ghost" className="rounded-none text-zinc-400 hover:text-lime-400 hover:bg-zinc-800 gap-2 h-9 text-xs uppercase tracking-wider shrink-0"><Pencil className="w-4 h-4" />Edit</Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <CanEdit>
+              <Button data-testid="edit-tournament-btn" onClick={openEdit} variant="ghost" className="rounded-none text-zinc-400 hover:text-lime-400 hover:bg-zinc-800 gap-2 h-9 text-xs uppercase tracking-wider"><Pencil className="w-4 h-4" />Edit</Button>
+            </CanEdit>
+            <AccountMenu />
+          </div>
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="bg-transparent border border-zinc-800 rounded-none p-0 h-auto flex-wrap justify-start w-full mb-8">
-            {TABS.map((t) => (
+            {visibleTabs.map((t) => (
               <TabsTrigger key={t} value={t} data-testid={`tab-${t}`}
                 className="rounded-none data-[state=active]:bg-lime-400 data-[state=active]:text-black text-zinc-400 uppercase tracking-wider text-xs font-semibold px-5 py-3 border-r border-zinc-800">
                 {LABELS[t]}
