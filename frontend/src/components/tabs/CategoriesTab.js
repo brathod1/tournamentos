@@ -80,7 +80,15 @@ export default function CategoriesTab({ tid, categories, reload }) {
               </Select></Labeled></div>
             {form.format === "groups_knockout" && (<>
               <Labeled label="Number of Groups"><Input type="number" min="1" value={form.num_groups} onChange={(e) => setForm({ ...form, num_groups: e.target.value })} className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400" /></Labeled>
-              <Labeled label="Qualifiers / Group"><Input type="number" min="1" value={form.qualifiers_per_group} onChange={(e) => setForm({ ...form, qualifiers_per_group: e.target.value })} className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400" /></Labeled>
+              <Labeled label="Teams Advancing / Group"><Input data-testid="qualifiers-per-group" type="number" min="1" value={form.qualifiers_per_group} onChange={(e) => setForm({ ...form, qualifiers_per_group: e.target.value })} className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400" /></Labeled>
+              <div className="col-span-2 -mt-2">
+                <p className="text-xs text-zinc-600">
+                  Top {form.qualifiers_per_group || 0} from each group go through to the knockout stage
+                  {Number(form.num_groups) > 0 && Number(form.qualifiers_per_group) > 0
+                    ? ` — ${Number(form.num_groups) * Number(form.qualifiers_per_group)} teams in the bracket.`
+                    : "."}
+                </p>
+              </div>
             </>)}
             {(form.format === "knockout" || form.format === "groups_knockout") && (
               <Labeled label="Seeding"><Select value={form.seeded ? "yes" : "no"} onValueChange={(v) => setForm({ ...form, seeded: v === "yes" })}>
