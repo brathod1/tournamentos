@@ -18,16 +18,27 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
     placed = [m for m in u13_ms if m.get("date")]
     if check(sec, "have a placed U-13 match to lock", bool(placed)):
         m0 = placed[0]
-        lock_slot = {"date": "2026-09-06", "time": "15:00", "ground_id": GC["g"][1], "locked": True}
+        # Pick a slot that is genuinely free — the API now refuses moves that would
+        # double-book a ground, so the anchor must go somewhere empty.
+        LOCK_DATE, LOCK_G = "2026-09-06", GC["g"][1]
+        busy = []
+        for m in jget(f"/tournaments/{tid}/schedule"):
+            if m["id"] != m0["id"] and m.get("date") == LOCK_DATE and m.get("ground_id") == LOCK_G:
+                busy.append(parse_t(m["time"]))
+        lock_min = (max(busy) + 120) if busy else 15 * 60      # comfortably clear of the last one
+        lock_min = min(lock_min, 21 * 60)
+        LOCK_TIME = f"{lock_min // 60:02d}:{lock_min % 60:02d}"
+        lock_slot = {"date": LOCK_DATE, "time": LOCK_TIME, "ground_id": LOCK_G, "locked": True}
         r = api("PUT", f"/matches/{m0['id']}", json=lock_slot)
         check(sec, "manual place + lock accepted", r.status_code == 200, r.text[:200])
-        r = api("POST", f"/tournaments/{tid}/auto-schedule")
+        # full re-plan: everything unlocked is cleared and rebuilt around the locked anchor
+        r = api("POST", f"/tournaments/{tid}/auto-schedule?replan=true")
         check(sec, "re-run scheduler ok", r.status_code == 200)
         after = {m["id"]: m for m in jget(f"/categories/{GC['u13']}/matches")}
         ma = after[m0["id"]]
         check(sec, "locked match did not move",
               (ma["date"], ma["time"], ma["ground_id"], ma["locked"]) ==
-              ("2026-09-06", "15:00", GC["g"][1], True),
+              (LOCK_DATE, LOCK_TIME, LOCK_G, True),
               (ma["date"], ma["time"], ma.get("ground_id"), ma.get("locked")))
         # nothing else overlaps the locked slot on that ground
         _, grounds, data = collect_items()
@@ -37,9 +48,9 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
             for m in d["matches"]:
                 if m["id"] == m0["id"] or not m.get("date"):
                     continue
-                if m["date"] == "2026-09-06" and m.get("ground_id") == GC["g"][1]:
+                if m["date"] == LOCK_DATE and m.get("ground_id") == LOCK_G:
                     s = parse_t(m["time"])
-                    if s < 16 * 60 and 15 * 60 < s + dur:
+                    if s < lock_min + 60 and lock_min < s + dur:
                         clash.append((d["cat"]["name"], m["id"], m["time"]))
         check(sec, "scheduler worked around the locked anchor", not clash, clash)
         # moving a locked match via the API must be rejected (Board drag protection, backend side)
@@ -47,9 +58,51 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
                                                     "ground_id": GC["g"][2]})
         ml = next(m for m in jget(f"/categories/{GC['u13']}/matches") if m["id"] == m0["id"])
         check(sec, "moving a locked match via API rejected (409) and slot unchanged",
-              r.status_code == 409 and (ml["date"], ml["time"]) == ("2026-09-06", "15:00"),
+              r.status_code == 409 and (ml["date"], ml["time"]) == (LOCK_DATE, LOCK_TIME),
               (r.status_code, ml["date"], ml["time"]))
         GC["locked_id"] = m0["id"]
+        GC["locked_slot"] = (LOCK_DATE, LOCK_TIME)
+
+        # ---- manual moves must not be allowed to create a physical clash ----
+        sec_c = "4b-clash-guard"
+        ms_all = jget(f"/categories/{GC['u13']}/matches")
+        placed_now = [m for m in ms_all if m.get("date") and m.get("time") and m.get("ground_id")]
+        if check(sec_c, "have placed matches to test against", len(placed_now) >= 2):
+            anchor = placed_now[0]
+            mover = next((m for m in placed_now[1:]
+                          if not m.get("locked")
+                          and not ({m["home_id"], m["away_id"]} & {anchor["home_id"], anchor["away_id"]})),
+                         None)
+            if mover:
+                r = api("PUT", f"/matches/{mover['id']}", json={
+                    "date": anchor["date"], "time": anchor["time"], "ground_id": anchor["ground_id"]})
+                after = next(m for m in jget(f"/categories/{GC['u13']}/matches") if m["id"] == mover["id"])
+                check(sec_c, "moving onto an occupied ground slot is rejected (409)",
+                      r.status_code == 409, f"{r.status_code} {r.text[:120]}")
+                check(sec_c, "the rejected move did not change the match",
+                      (after["date"], after["time"], after["ground_id"])
+                      == (mover["date"], mover["time"], mover["ground_id"]))
+                check(sec_c, "rejection message names the ground clash",
+                      "double-book" in r.text.lower() or "ground" in r.text.lower(), r.text[:120])
+            # same team, same time, different ground -> team clash
+            teammate = next((m for m in placed_now[1:]
+                             if not m.get("locked")
+                             and ({m["home_id"], m["away_id"]} & {anchor["home_id"], anchor["away_id"]})),
+                            None)
+            other_ground = next((g for g in GC["g"].values() if g != anchor["ground_id"]), None)
+            if teammate and other_ground:
+                r = api("PUT", f"/matches/{teammate['id']}", json={
+                    "date": anchor["date"], "time": anchor["time"], "ground_id": other_ground})
+                check(sec_c, "putting a team in two places at once is rejected (409)",
+                      r.status_code == 409, f"{r.status_code} {r.text[:120]}")
+            # a genuinely free slot is still accepted
+            free = next((m for m in placed_now[1:] if not m.get("locked")), None)
+            if free:
+                r = api("PUT", f"/matches/{free['id']}", json={
+                    "date": free["date"], "time": "23:00", "ground_id": free["ground_id"]})
+                check(sec_c, "a clash-free manual move is still allowed", r.status_code == 200,
+                      f"{r.status_code} {r.text[:120]}")
+                api("PUT", f"/matches/{free['id']}", json={"time": free["time"]})
 
     # ============================================================ 5. U-13 RESULTS + STANDINGS RECOMPUTE
     sec = "5-standings-u13"
@@ -170,9 +223,17 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
                 ok = False; det.append((m["id"], side, src, "want", want, "got", got))
     check(sec, "correct teams seeded into correct KO slots", ok, det[:4])
 
-    # reschedule so KO R1 gets slots; groups keep results
+    # default (fill) mode: already-placed group matches stay put, newly seeded KO matches
+    # get slots around them — the organizer's existing schedule is not discarded
+    before_slots = {m["id"]: (m.get("date"), m.get("time"), m.get("ground_id"))
+                    for m in jget(f"/categories/{ob}/matches") if m.get("date")}
     r = api("POST", f"/tournaments/{tid}/auto-schedule")
     check(sec, "re-schedule after seeding ok", r.status_code == 200)
+    after_slots = {m["id"]: (m.get("date"), m.get("time"), m.get("ground_id"))
+                   for m in jget(f"/categories/{ob}/matches") if m.get("date")}
+    moved = [k for k, v in before_slots.items() if after_slots.get(k) != v]
+    check(sec, "fill mode left already-scheduled matches exactly where they were",
+          not moved, f"{len(moved)} match(es) moved")
     ms = jget(f"/categories/{ob}/matches")
     grp_end = max((m["date"], parse_t(m["time"]) + 45) for m in ms if m["stage"] == "group" and m.get("date"))
     ko1_placed = [m for m in ms if m["stage"] == "knockout" and m["round"] == 1 and m.get("date")]
@@ -182,10 +243,10 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
         check(sec, "KO round 1 starts after the whole group stage ends", ko_start >= grp_end,
               f"group end {grp_end} vs ko start {ko_start}")
     # locked match still where we put it?
-    if GC.get("locked_id"):
+    if GC.get("locked_slot"):
         ml = next(m for m in jget(f"/categories/{GC['u13']}/matches") if m["id"] == GC["locked_id"])
         check(sec, "locked match survived second re-schedule",
-              (ml["date"], ml["time"]) == ("2026-09-06", "15:00"), (ml["date"], ml["time"]))
+              (ml["date"], ml["time"]) == GC["locked_slot"], (ml["date"], ml["time"]))
     # score entered on group match survived rescheduling?
     g0 = next(m for m in ms if m["stage"] == "group")
     check(sec, "group results survived re-schedule", g0.get("home_score") is not None)
@@ -308,11 +369,16 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
             check(sec, f"{name}: reports unscheduled matches", d["unscheduled"] > 0,
                   f"scheduled={d['scheduled']}")
             types = {c["type"] for c in d["conflicts"]}
-            check(sec, f"{name}: capacity + per-match diagnostics",
-                  "capacity" in types and "unplaced_match" in types, types)
+            # Either per-match reasons, or a category-level "this cannot fit" explanation
+            # (the pre-flight analysis suppresses the per-match noise when it already
+            # knows the configuration makes the matches impossible).
+            check(sec, f"{name}: capacity + a stated reason",
+                  "capacity" in types and ("unplaced_match" in types or "impossible_config" in types),
+                  types)
             check(sec, f"{name}: suggestions offered", len(d.get("suggestions", [])) > 0)
             info(sec, f"{name}: sample reason",
-                 next((c["message"] for c in d["conflicts"] if c["type"] == "unplaced_match"), "-"))
+                 next((c["message"] for c in d["conflicts"]
+                       if c["type"] in ("unplaced_match", "impossible_config")), "-"))
             # whatever WAS scheduled must still be valid (no silent invalid schedule)
             ms = jget(f"/tournaments/{t}/schedule")
             by_gd = defaultdict(list)
@@ -399,6 +465,84 @@ def run(GC, RESULTS, check, info, api, jget, parse_t,
           not placedD and d.get("unscheduled", 0) > 0 and "no_grounds" in types
           and len(d.get("suggestions", [])) > 0,
           f"placed={len(placedD)}, unscheduled={d.get('unscheduled')}, conflict_types={sorted(types)}")
+
+    # ============================================================ 9b. COMPACTNESS / PARALLELISM
+    # Regression guard: disjoint matches must be able to run simultaneously on idle grounds.
+    # Previously candidate kick-off times came only from existing bookings, so a resting
+    # team's next match could not be placed on an empty ground and everything queued onto one.
+    sec = "9b-packing"
+    t = mk_tour("TEST_QA_packing", "2026-11-20", "2026-11-22")
+    try:
+        gs = [mk_ground(t, f"P{i}") for i in range(4)]
+        cid = mk_cat(t, "Pack", "league_single", {
+            "start_date": "2026-11-20", "end_date": "2026-11-22",
+            "earliest_time": "08:00", "latest_time": "20:00",
+            "match_duration_minutes": 20, "slot_gap_minutes": 5,
+            "min_rest_minutes": 60, "max_matches_per_day": 0}, gs)
+        for i in range(8):
+            mk_team(cid, f"P{i+1}", seed=i + 1)
+        api("POST", f"/categories/{cid}/generate-fixtures")
+        r = api("POST", f"/tournaments/{t}/auto-schedule")
+        d = r.json()
+        ms = jget(f"/categories/{cid}/matches")
+        placed = [m for m in ms if m.get("date")]
+        check(sec, "all 28 matches placed", len(placed) == 28 and d["unscheduled"] == 0,
+              f"{len(placed)} placed, {d['unscheduled']} unplaced")
+        days = sorted({m["date"] for m in placed})
+        info(sec, "days used", f"{len(days)} of 3 available: {days}")
+        # 8 teams, 60-min rest, 20-min matches, 4 grounds: a day comfortably fits many rounds,
+        # so a well-packed schedule should not need all three days.
+        check(sec, "schedule is compact (does not sprawl across every available day)",
+              len(days) <= 2, f"used {len(days)} days")
+        # genuine parallelism: some start time must have >1 match running at once
+        by_start = defaultdict(set)
+        for m in placed:
+            by_start[(m["date"], m["time"])].add(m["ground_id"])
+        max_par = max(len(v) for v in by_start.values())
+        check(sec, "matches run in parallel across grounds", max_par >= 2,
+              f"max concurrent = {max_par}")
+        info(sec, "peak parallelism", f"{max_par} grounds in use simultaneously")
+        # no single ground hosts almost everything
+        per_ground = defaultdict(int)
+        for m in placed:
+            per_ground[m["ground_id"]] += 1
+        check(sec, "load spread across grounds (no single ground > 60%)",
+              max(per_ground.values()) <= 0.6 * len(placed) + 1, dict(per_ground))
+    finally:
+        pass
+
+    # ============================================================ 9c. KNOCKOUT START CONTROL
+    sec = "9c-ko-window"
+    t2 = mk_tour("TEST_QA_kowindow", "2026-11-20", "2026-11-23")
+    try:
+        g2 = [mk_ground(t2, f"K{i}") for i in range(2)]
+        cid2 = mk_cat(t2, "KOWin", "knockout", {
+            "start_date": "2026-11-20", "end_date": "2026-11-23",
+            "earliest_time": "08:00", "latest_time": "20:00",
+            "match_duration_minutes": 30, "slot_gap_minutes": 10,
+            "min_rest_minutes": 30, "max_matches_per_day": 0,
+            "knockout_start_date": "2026-11-22", "knockout_earliest_time": "15:00",
+        }, g2, seeded=True)
+        for i in range(8):
+            mk_team(cid2, f"KW{i+1}", seed=i + 1)
+        api("POST", f"/categories/{cid2}/generate-fixtures")
+        # give later rounds teams so they are schedulable
+        ms = jget(f"/categories/{cid2}/matches")
+        tids = [x["id"] for x in jget(f"/categories/{cid2}/teams")]
+        for m in ms:
+            if m["round"] > 1:
+                api("PUT", f"/matches/{m['id']}", json={"home_id": tids[0], "away_id": tids[1],
+                                                        "status": "scheduled"})
+        api("POST", f"/tournaments/{t2}/auto-schedule")
+        placed = [m for m in jget(f"/categories/{cid2}/matches") if m.get("date")]
+        early_date = [m["id"] for m in placed if m["date"] < "2026-11-22"]
+        early_time = [(m["id"], m["time"]) for m in placed if parse_t(m["time"]) < 15 * 60]
+        check(sec, "no knockout match before the declared start date", not early_date, early_date[:5])
+        check(sec, "no knockout match before the declared start time", not early_time, early_time[:5])
+        info(sec, "knockout placement", f"{len(placed)} matches, earliest "
+             f"{min([(m['date'], m['time']) for m in placed], default='-')}")
+    finally:
+        pass
 
     # ============================================================ 10. CRUD & DATA INTEGRITY
     sec = "10-integrity"

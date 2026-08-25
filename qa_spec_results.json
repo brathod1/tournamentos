@@ -1,0 +1,296 @@
+{
+ "ts": "2026-08-25T17:24:44.272906",
+ "pass": 33,
+ "fail": 0,
+ "warn": 1,
+ "results": [
+  {
+   "spec": 1,
+   "check": "fixtures generated",
+   "status": "INFO",
+   "detail": "50 matches across 3 categories"
+  },
+  {
+   "spec": 1,
+   "check": "fixtures created unscheduled (no date/time/ground)",
+   "status": "PASS",
+   "detail": ""
+  },
+  {
+   "spec": 2,
+   "check": "tournament-wide auto-schedule succeeds",
+   "status": "PASS",
+   "detail": "{\"scheduled\":43,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can play at most 6 \u2014 2 per day across the 3 day(s) it"
+  },
+  {
+   "spec": 2,
+   "check": "scheduler result",
+   "status": "INFO",
+   "detail": "43 scheduled / 2 unplaced across 3 categories"
+  },
+  {
+   "spec": 1,
+   "check": "scheduling did not alter opponents, rounds, groups or bracket links",
+   "status": "PASS",
+   "detail": "{}"
+  },
+  {
+   "spec": 2,
+   "check": "every category received placements",
+   "status": "PASS",
+   "detail": "3 of 3"
+  },
+  {
+   "spec": 2,
+   "check": "categories genuinely share grounds (one coherent schedule)",
+   "status": "PASS",
+   "detail": "3 ground-days host more than one category"
+  },
+  {
+   "spec": 10,
+   "check": "no ground hosts two overlapping matches (across all categories)",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 9,
+   "check": "no team plays two matches at once",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 9,
+   "check": "minimum rest always honoured",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 8,
+   "check": "no-back-to-back teams never play consecutively",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 11,
+   "check": "category ground restrictions respected",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 11,
+   "check": "ground opening/closing hours respected",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 12,
+   "check": "protected breaks kept clear",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 13,
+   "check": "team playing windows respected",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 13,
+   "check": "team unavailable dates respected",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 14,
+   "check": "team max-matches-per-day respected",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 15,
+   "check": "every knockout match follows its feeders (and the group stage)",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 15,
+   "check": "declared knockout start date honoured (Youth Cup: not before 2026-10-04)",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 17,
+   "check": "locked match kept its exact date, time and ground",
+   "status": "PASS",
+   "detail": "('2026-10-03', '15:00')"
+  },
+  {
+   "spec": 18,
+   "check": "manually placed but unlocked match kept its slot (default fill mode)",
+   "status": "PASS",
+   "detail": "moved to 2026-10-03 09:00"
+  },
+  {
+   "spec": 18,
+   "check": "explicit re-plan still rebuilds the whole schedule",
+   "status": "PASS",
+   "detail": "{\"scheduled\":44,\"unscheduled\":2,\"conflicts\":[{\"type\":\"impossible_config\",\"severity\":\"error\",\"message\":\"Open League: L3 has 7 match(es) to play but can"
+  },
+  {
+   "spec": 17,
+   "check": "locked match survives an explicit re-plan too",
+   "status": "PASS",
+   "detail": "('2026-10-03', '15:00')"
+  },
+  {
+   "spec": 5,
+   "check": "matches per ground",
+   "status": "INFO",
+   "detail": "{'1': 16, '2': 16, '3': 9, '4': 4}"
+  },
+  {
+   "spec": 5,
+   "check": "more than one ground actually used",
+   "status": "PASS",
+   "detail": "{'1': 16, '2': 16, '3': 9, '4': 4}"
+  },
+  {
+   "spec": 5,
+   "check": "no single ground dominates (<50% of all matches)",
+   "status": "PASS",
+   "detail": "busiest ground holds 36%"
+  },
+  {
+   "spec": 4,
+   "check": "matches run in parallel across grounds",
+   "status": "PASS",
+   "detail": "peak concurrency 4"
+  },
+  {
+   "spec": 4,
+   "check": "peak concurrency",
+   "status": "INFO",
+   "detail": "4 grounds in simultaneous use"
+  },
+  {
+   "spec": 6,
+   "check": "ground utilisation within each day's span",
+   "status": "INFO",
+   "detail": "59% busy, 1935 idle minutes"
+  },
+  {
+   "spec": 6,
+   "check": "grounds are used efficiently (>=60% of their active span)",
+   "status": "WARN",
+   "detail": "59% \u2014 large gaps suggest matches are spread more than necessary"
+  },
+  {
+   "spec": 7,
+   "check": "rest beyond the minimum",
+   "status": "INFO",
+   "detail": "average +85 min across 48 same-day pairs"
+  },
+  {
+   "spec": 7,
+   "check": "teams generally get more than the bare minimum rest",
+   "status": "PASS",
+   "detail": "average margin +85 min, 6 pair(s) within 15 min of the limit"
+  },
+  {
+   "spec": 16,
+   "check": "Youth Cup final",
+   "status": "INFO",
+   "detail": "not scheduled"
+  },
+  {
+   "spec": 16,
+   "check": "Seniors Knockout final sits late in its day",
+   "status": "PASS",
+   "detail": "final at 2026-10-04 16:30; 1 of 7 matches that day start later"
+  },
+  {
+   "spec": 19,
+   "check": "unplaced matches are reported, not silently dropped",
+   "status": "PASS",
+   "detail": "{'referee_capacity', 'capacity', 'impossible_config'}"
+  },
+  {
+   "spec": 19,
+   "check": "every unplaced match has a stated cause",
+   "status": "PASS",
+   "detail": "{'referee_capacity', 'capacity', 'impossible_config'}"
+  },
+  {
+   "spec": 20,
+   "check": "actionable suggestions provided",
+   "status": "PASS",
+   "detail": ""
+  },
+  {
+   "spec": 19,
+   "check": "sample reasons",
+   "status": "INFO",
+   "detail": "[\"Open League: L3 has 7 match(es) to play but can play at most 6 \\u2014 2 per day across the 3 day(s) it is available. No number of grounds or extra hours can fix this.\"]"
+  },
+  {
+   "spec": 20,
+   "check": "suggestions",
+   "status": "INFO",
+   "detail": "[\"Open League: raise 'max matches/day' for the affected teams, widen their available dates or day preference, or use a format with fewer matches.\", \"Add more grounds or playing days \\u2014 the 4 ground(s) over 3 day(s) are full during the required playing windows.\", \"Increase 'max matches per day' for the affected categories or teams.\", \"Reduce minimum rest, or turn off 'no back-to-back' for some teams.\"]"
+  },
+  {
+   "spec": 19,
+   "check": "impossible tournament does not produce an invalid schedule",
+   "status": "PASS",
+   "detail": "2 placed, 13 not"
+  },
+  {
+   "spec": 19,
+   "check": "impossible tournament reports capacity + per-match reasons",
+   "status": "PASS",
+   "detail": "{'unplaced_match', 'capacity'}"
+  },
+  {
+   "spec": 20,
+   "check": "impossible tournament offers suggestions",
+   "status": "PASS",
+   "detail": ""
+  },
+  {
+   "spec": 20,
+   "check": "suggestions given",
+   "status": "INFO",
+   "detail": "[\"Add more grounds or playing days \\u2014 the 1 ground(s) over 1 day(s) are full during the required playing windows.\"]"
+  },
+  {
+   "spec": 19,
+   "check": "the partial schedule it did produce is still valid",
+   "status": "PASS",
+   "detail": "[]"
+  },
+  {
+   "spec": 0,
+   "check": "schedule shape",
+   "status": "INFO",
+   "detail": "45 matches over 3 day(s): ['2026-10-02', '2026-10-03', '2026-10-04']"
+  },
+  {
+   "spec": 0,
+   "check": "day 2026-10-02",
+   "status": "INFO",
+   "detail": "27 matches, 08:00\u201319:00"
+  },
+  {
+   "spec": 0,
+   "check": "day 2026-10-03",
+   "status": "INFO",
+   "detail": "11 matches, 08:00\u201319:15"
+  },
+  {
+   "spec": 0,
+   "check": "day 2026-10-04",
+   "status": "INFO",
+   "detail": "7 matches, 08:00\u201318:00"
+  }
+ ]
+}

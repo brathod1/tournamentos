@@ -10,15 +10,36 @@ import { toast } from "sonner";
 const gBlank = { name: "", capacity: "", surface: "Grass", lighting: false, open_time: "", close_time: "", priority: 1 };
 const rBlank = { name: "", certification: "", experience_years: "", max_matches_per_day: 3, phone: "" };
 
+/** Every date in [start, end] inclusive, as YYYY-MM-DD. */
+const datesBetween = (start, end) => {
+  if (!start) return [];
+  const out = [];
+  const d = new Date(`${start}T00:00:00`);
+  const last = new Date(`${end || start}T00:00:00`);
+  while (d <= last && out.length < 120) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+};
+const dayName = (iso) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+
 export default function VenuesTab({ tid }) {
   const [grounds, setGrounds] = useState([]);
   const [refs, setRefs] = useState([]);
+  const [tour, setTour] = useState(null);
   const [gOpen, setGOpen] = useState(false);
   const [rOpen, setROpen] = useState(false);
   const [gForm, setGForm] = useState(gBlank);
   const [rForm, setRForm] = useState(rBlank);
+  const [hoursFor, setHoursFor] = useState(null);   // ground whose per-day hours we're editing
 
-  const load = useCallback(() => { api.listGrounds(tid).then(setGrounds); api.listReferees(tid).then(setRefs); }, [tid]);
+  const load = useCallback(() => {
+    api.listGrounds(tid).then(setGrounds);
+    api.listReferees(tid).then(setRefs);
+    api.getTournament(tid).then(setTour).catch(() => {});
+  }, [tid]);
   useEffect(() => { load(); }, [load]);
 
   const saveG = async () => {
@@ -52,7 +73,14 @@ export default function VenuesTab({ tid }) {
                   {(g.open_time || g.close_time) && <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-zinc-600" />{g.open_time || "—"} – {g.close_time || "—"}</div>}
                   {g.capacity && <div>Capacity {g.capacity}</div>}
                   <div className="text-zinc-600 text-xs">Priority {g.priority}</div>
+                  {Object.keys(g.date_hours || {}).length > 0 && (
+                    <div className="text-lime-400 text-xs">{Object.keys(g.date_hours).length} day-specific hour(s)</div>
+                  )}
                 </div>
+                <button data-testid={`ground-hours-${g.id}`} onClick={() => setHoursFor(g)}
+                  className="mt-4 text-xs uppercase tracking-wider text-zinc-500 hover:text-lime-400 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />Hours per day
+                </button>
               </div>
             ))}
           </div>}
@@ -80,6 +108,8 @@ export default function VenuesTab({ tid }) {
             ))}
           </div>}
       </div>
+
+      <GroundHoursDialog ground={hoursFor} tour={tour} onClose={() => setHoursFor(null)} reload={load} />
 
       <Dialog open={gOpen} onOpenChange={setGOpen}>
         <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none max-w-lg">
@@ -111,5 +141,86 @@ export default function VenuesTab({ tid }) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** Per-date opening hours for one ground — for venues that are only free some evenings,
+ *  or closed entirely on a given day. Blank rows fall back to the ground's normal hours. */
+function GroundHoursDialog({ ground, tour, onClose, reload }) {
+  const [hours, setHours] = useState({});
+  useEffect(() => { setHours(ground?.date_hours || {}); }, [ground]);
+  if (!ground) return null;
+
+  const dates = datesBetween(tour?.start_date, tour?.end_date);
+  const set = (iso, field, value) => setHours((p) => {
+    const entry = { ...(p[iso] || {}), [field]: value };
+    if (field !== "closed" && !value) delete entry[field];
+    if (!entry.open && !entry.close && !entry.closed) { const n = { ...p }; delete n[iso]; return n; }
+    return { ...p, [iso]: entry };
+  });
+  const clear = (iso) => setHours((p) => { const n = { ...p }; delete n[iso]; return n; });
+
+  const save = async () => {
+    try {
+      await api.updateGround(ground.id, { date_hours: hours });
+      toast.success("Ground hours saved");
+      reload(); onClose();
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not save hours"); }
+  };
+
+  return (
+    <Dialog open={!!ground} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader><DialogTitle className="font-display text-2xl uppercase tracking-tight">
+          {groundLabel(ground.name)} · Hours Per Day
+        </DialogTitle></DialogHeader>
+
+        {dates.length === 0 ? (
+          <p className="text-sm text-zinc-400">Set the tournament start and end dates first — then you can give this ground different hours on each day.</p>
+        ) : (<>
+          <p className="text-xs text-zinc-500">
+            Leave a day blank to use this ground's normal hours ({ground.open_time || "—"} – {ground.close_time || "—"}).
+            Tick <b className="text-zinc-300">Closed</b> to take the ground out of use for that day entirely.
+          </p>
+          <div className="space-y-2">
+            {dates.map((iso) => {
+              const h = hours[iso] || {};
+              const custom = !!(h.open || h.close || h.closed);
+              return (
+                <div key={iso} data-testid={`ground-date-${iso}`}
+                  className={`grid grid-cols-12 gap-3 items-center px-3 py-2 border ${custom ? "border-lime-400/30 bg-lime-400/5" : "border-zinc-800"}`}>
+                  <div className="col-span-4 sm:col-span-3 text-sm">
+                    <div className="text-zinc-200">{dayName(iso)}</div>
+                    <div className="text-[10px] text-zinc-600">{iso}</div>
+                  </div>
+                  <div className="col-span-3">
+                    <Input type="time" aria-label={`${iso} open`} disabled={!!h.closed} value={h.open || ""}
+                      onChange={(e) => set(iso, "open", e.target.value)}
+                      className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 h-9 text-sm disabled:opacity-40" />
+                  </div>
+                  <div className="col-span-3">
+                    <Input type="time" aria-label={`${iso} close`} disabled={!!h.closed} value={h.close || ""}
+                      onChange={(e) => set(iso, "close", e.target.value)}
+                      className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400 h-9 text-sm disabled:opacity-40" />
+                  </div>
+                  <label className="col-span-2 flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer">
+                    <input type="checkbox" checked={!!h.closed}
+                      onChange={(e) => (e.target.checked ? set(iso, "closed", true) : clear(iso))}
+                      className="accent-red-500" />
+                    Closed
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        </>)}
+
+        <DialogFooter className="gap-2">
+          <Button onClick={onClose} className="rounded-none bg-zinc-800 hover:bg-zinc-700 text-zinc-100 uppercase tracking-wider">Cancel</Button>
+          <Button data-testid="save-ground-hours-btn" onClick={save} disabled={dates.length === 0}
+            className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider">Save Hours</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

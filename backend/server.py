@@ -64,6 +64,14 @@ DEFAULT_CONSTRAINTS = {
     "min_rest_minutes": 60, "max_matches_per_day": 0,
     "break_start": None, "break_end": None,
     "unavailable_dates": [],
+    # Per-date overrides of the playing window, e.g.
+    #   {"2026-09-05": {"earliest": "19:00", "latest": "23:00"}}
+    # Any date not listed uses earliest_time / latest_time above.
+    "date_windows": {},
+    # Optional control over when the knockout stage may begin (knockout /
+    # groups+knockout formats). Blank = as soon as the feeding matches finish.
+    "knockout_start_date": None,
+    "knockout_earliest_time": None,
 }
 
 
@@ -128,6 +136,11 @@ class Ground(BaseModel):
     lighting: bool = False
     open_time: Optional[str] = None
     close_time: Optional[str] = None
+    # Per-date overrides of the opening hours, e.g.
+    #   {"2026-09-05": {"open": "19:00", "close": "23:00"},
+    #    "2026-09-07": {"closed": True}}
+    # Any date not listed uses open_time / close_time above.
+    date_hours: Dict[str, Any] = Field(default_factory=dict)
     priority: int = 1
     notes: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -165,6 +178,58 @@ class MatchUpdate(BaseModel):
     status: Optional[str] = None
     locked: Optional[bool] = None
     notes: Optional[str] = None
+
+
+def _mins(t):
+    h, m = t.split(":")
+    return int(h) * 60 + int(m)
+
+
+async def _reject_clashes(m: dict, data: dict):
+    """Refuse a manual move that would double-book a ground or a team.
+
+    Only hard, physically-impossible clashes are blocked — two matches on the same pitch
+    at the same time, or a team in two places at once. Softer issues (short rest, outside
+    the usual window) stay advisory and are surfaced by the conflict panel instead.
+    """
+    date = data.get("date", m.get("date"))
+    time = data.get("time", m.get("time"))
+    gid = data.get("ground_id", m.get("ground_id"))
+    if not (date and time and gid):
+        return
+    if (date, time, gid) == (m.get("date"), m.get("time"), m.get("ground_id")):
+        return                                    # nothing about the slot changed
+
+    tour_id = m.get("tournament_id")
+    cats = await db.categories.find({"tournament_id": tour_id}, {"_id": 0}).to_list(1000)
+    dur_of = {c["id"]: int({**DEFAULT_CONSTRAINTS, **(c.get("constraints") or {})}
+                           .get("match_duration_minutes", 90)) for c in cats}
+    dur = dur_of.get(m.get("category_id"), 90)
+    s, e = _mins(time), _mins(time) + dur
+    home = data.get("home_id", m.get("home_id"))
+    away = data.get("away_id", m.get("away_id"))
+
+    others = await db.matches.find(
+        {"tournament_id": tour_id, "date": date, "id": {"$ne": m["id"]}}, {"_id": 0}).to_list(5000)
+    for o in others:
+        if not o.get("time") or o.get("status") == "bye":
+            continue
+        od = dur_of.get(o.get("category_id"), 90)
+        os_, oe = _mins(o["time"]), _mins(o["time"]) + od
+        if not (s < oe and os_ < e):
+            continue                              # no time overlap
+        if o.get("ground_id") == gid:
+            g = await db.grounds.find_one({"id": gid}, {"_id": 0}) or {}
+            raise HTTPException(409,
+                f"That would double-book {g.get('name') or 'this ground'} — another match "
+                f"is already on it at {o['time']} on {date}. Pick a different time or ground.")
+        clash_team = next((t for t in (home, away)
+                           if t and t in (o.get("home_id"), o.get("away_id"))), None)
+        if clash_team:
+            t_doc = await db.teams.find_one({"id": clash_team}, {"_id": 0}) or {}
+            raise HTTPException(409,
+                f"{t_doc.get('name') or 'That team'} is already playing at {o['time']} on {date}. "
+                "A team cannot be in two places at once.")
 
 
 async def get_or_404(coll, id, name="Resource"):
@@ -479,6 +544,7 @@ async def update_match(mid: str, upd: MatchUpdate, user: dict = Depends(require_
     if existing.get("locked") and data.get("locked") is not False \
             and any(k in data for k in ("date", "time", "ground_id")):
         raise HTTPException(409, "Match is locked — unlock it before moving it.")
+    await _reject_clashes(existing, data)
     # knockout matches must produce a winner
     if existing.get("stage") == "knockout" \
             and data.get("home_score") is not None and data.get("away_score") is not None \
@@ -601,6 +667,25 @@ async def _assign_and_persist_referees(tid: str):
     return assigned, len(unassigned), conflicts
 
 
+def _split_targets(schedulable, allm, replan):
+    """Decide what the scheduler may move.
+
+    Default (replan=False): matches that already have a slot — whether locked or placed
+    by hand — are kept exactly where they are and treated as fixed anchors, so running
+    the scheduler fills the gaps without discarding the organizer's work.
+    replan=True: every unlocked match is cleared and re-planned from scratch.
+    """
+    locked = [m for m in allm if m.get("locked") and m.get("date")]
+    if replan:
+        for m in schedulable:
+            m["date"] = None; m["time"] = None; m["ground_id"] = None
+        return schedulable, locked
+    anchors = [m for m in schedulable if m.get("date") and m.get("time") and m.get("ground_id")]
+    anchor_ids = {m["id"] for m in anchors}
+    targets = [m for m in schedulable if m["id"] not in anchor_ids]
+    return targets, locked + anchors
+
+
 async def _category_grounds(cat):
     gids = cat.get("ground_ids") or []
     if gids:
@@ -609,7 +694,7 @@ async def _category_grounds(cat):
 
 
 @api_router.post("/categories/{cid}/auto-schedule")
-async def do_schedule(cid: str, user: dict = Depends(require_user)):
+async def do_schedule(cid: str, replan: bool = False, user: dict = Depends(require_user)):
     cat = await get_or_404(db.categories, cid, "Category")
     tour = await get_or_404(db.tournaments, cat["tournament_id"], "Tournament")
     constraints = {**DEFAULT_CONSTRAINTS, **(cat.get("constraints") or {})}
@@ -621,15 +706,17 @@ async def do_schedule(cid: str, user: dict = Depends(require_user)):
     teams = await db.teams.find({"category_id": cid}, {"_id": 0}).to_list(5000)
     ti = build_team_info(teams)
     allm = await db.matches.find({"category_id": cid}, {"_id": 0}).to_list(10000)
-    targets = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
-    if not targets:
+    schedulable = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
+    if not schedulable:
         raise HTTPException(400, "Generate fixtures before scheduling.")
-    locked = [m for m in allm if m.get("locked") and m.get("date")]
-    for m in targets:
-        m["date"] = None; m["time"] = None; m["ground_id"] = None
+    targets, locked = _split_targets(schedulable, allm, replan)
+    if not targets:
+        return {"scheduled": 0, "unscheduled": 0, "conflicts": [], "suggestions": [],
+                "message": "Every match already has a slot. Use 'Re-plan everything' to rebuild the schedule from scratch."}
     tour_dates = dates_in_range(start, end, set(constraints.get("unavailable_dates", [])))
-    item = {"cat_id": cid, "constraints": constraints, "matches": targets,
-            "team_info": ti, "ground_ids": cat.get("ground_ids"), "locked": locked}
+    item = {"cat_id": cid, "cat_name": cat.get("name"), "constraints": constraints,
+            "matches": targets, "team_info": ti,
+            "ground_ids": cat.get("ground_ids"), "locked": locked}
     scheduled, unsch, conflicts, suggestions = schedule_matches([item], grounds, tour_dates)
     for m in targets:
         await db.matches.update_one({"id": m["id"]}, {"$set": {
@@ -641,28 +728,32 @@ async def do_schedule(cid: str, user: dict = Depends(require_user)):
 
 
 @api_router.post("/tournaments/{tid}/auto-schedule")
-async def schedule_tournament_ep(tid: str, user: dict = Depends(require_user)):
+async def schedule_tournament_ep(tid: str, replan: bool = False, user: dict = Depends(require_user)):
     tour = await get_or_404(db.tournaments, tid, "Tournament")
     start = tour.get("start_date"); end = tour.get("end_date") or start
     if not start:
         raise HTTPException(400, "Set the tournament start and end dates before scheduling.")
     grounds = await db.grounds.find({"tournament_id": tid}, {"_id": 0}).to_list(1000)
     cats = await db.categories.find({"tournament_id": tid}, {"_id": 0}).to_list(1000)
-    items = []; all_targets = []
+    items = []; all_targets = []; any_fixtures = False
     for c in cats:
         constraints = {**DEFAULT_CONSTRAINTS, **(c.get("constraints") or {})}
         teams = await db.teams.find({"category_id": c["id"]}, {"_id": 0}).to_list(5000)
         ti = build_team_info(teams)
         allm = await db.matches.find({"category_id": c["id"]}, {"_id": 0}).to_list(10000)
-        targets = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
-        for m in targets:
-            m["date"] = None; m["time"] = None; m["ground_id"] = None
-        locked = [m for m in allm if m.get("locked") and m.get("date")]
-        items.append({"cat_id": c["id"], "constraints": constraints, "matches": targets,
-                      "team_info": ti, "ground_ids": c.get("ground_ids"), "locked": locked})
+        schedulable = [m for m in allm if not m.get("locked") and m.get("home_id") and m.get("away_id") and m.get("status") != "bye"]
+        any_fixtures = any_fixtures or bool(schedulable)
+        targets, locked = _split_targets(schedulable, allm, replan)
+        items.append({"cat_id": c["id"], "cat_name": c.get("name"), "constraints": constraints,
+                      "matches": targets, "team_info": ti,
+                      "ground_ids": c.get("ground_ids"), "locked": locked})
         all_targets += targets
-    if not all_targets:
+    if not any_fixtures:
         raise HTTPException(400, "Generate fixtures for at least one category before scheduling.")
+    if not all_targets:
+        return {"scheduled": 0, "unscheduled": 0, "conflicts": [], "suggestions": [],
+                "categories": len(items), "referees_assigned": 0, "referees_unassigned": 0,
+                "message": "Every match already has a slot. Use 'Re-plan everything' to rebuild the schedule from scratch."}
     tour_dates = dates_in_range(start, end, set())
     scheduled, unsch, conflicts, suggestions = schedule_matches(items, grounds, tour_dates)
     for m in all_targets:

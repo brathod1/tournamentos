@@ -339,8 +339,6 @@ def detect_conflicts(matches, constraints, team_info=None):
     conflicts = []
     min_rest = int(constraints.get("min_rest_minutes", 0))
     dur = int(constraints.get("match_duration_minutes", 90))
-    earliest = _parse_t(constraints.get("earliest_time", "08:00"))
-    latest = _parse_t(constraints.get("latest_time", "20:00"))
     scheduled = [m for m in matches if m.get("date") and m.get("time")]
 
     # ground double booking
@@ -404,13 +402,15 @@ def detect_conflicts(matches, constraints, team_info=None):
                     "message": f"A team has only {bs - ae} min rest on {a['date']} (minimum required is {min_rest} min)."
                 })
 
-    # time window
+    # time window (per-date windows override the category default)
     for m in scheduled:
         s = _parse_t(m["time"])
-        if s < earliest or s + dur > latest:
+        lo, hi = day_window(constraints, m["date"])
+        if s < lo or s + dur > hi:
             conflicts.append({
                 "type": "time_window", "severity": "warning",
-                "message": f"Match on {m['date']} at {m['time']} falls outside the allowed window {constraints.get('earliest_time','08:00')}–{constraints.get('latest_time','20:00')}."
+                "message": f"Match on {m['date']} at {m['time']} falls outside that day's allowed window "
+                           f"{_fmt_t(lo)}–{_fmt_t(hi)}."
             })
 
     # mid-day break
@@ -475,11 +475,9 @@ def assign_referees(placed, referees, keep_locked=True):
     """
     conflicts = []
     if not referees:
-        if placed:
-            conflicts.append({"type": "no_referees", "severity": "warning",
-                "message": "No referees defined — matches were scheduled without officials. "
-                           "Add referees in Grounds & Referees, then re-run assignment."})
-        return 0, list(placed), conflicts
+        # Referees are an optional feature: with none defined the organizer simply isn't
+        # tracking officials here, which is not a problem to report.
+        return 0, [], conflicts
 
     busy = defaultdict(list)      # ref_id -> [(date, start, end)]
     day_count = defaultdict(int)  # (ref_id, date) -> count
@@ -675,6 +673,40 @@ def _team_time_ok(tid, diso, t, dur, min_rest, ti, team_busy):
     return True
 
 
+def day_window(constraints, diso):
+    """Category playing hours for one date. A per-date entry in `date_windows`
+    overrides the category default, so a tournament can run Friday evening only
+    and full days at the weekend."""
+    dw = (constraints.get("date_windows") or {}).get(diso) or {}
+    lo = dw.get("earliest") or constraints.get("earliest_time", "08:00")
+    hi = dw.get("latest") or constraints.get("latest_time", "20:00")
+    return _parse_t(lo), _parse_t(hi)
+
+
+def ground_window(g, diso, fallback_lo, fallback_hi):
+    """Opening hours of one ground on one date, or None when it is closed that day."""
+    gh = (g.get("date_hours") or {}).get(diso) or {}
+    if gh.get("closed"):
+        return None
+    lo = gh.get("open") or g.get("open_time")
+    hi = gh.get("close") or g.get("close_time")
+    return (_parse_t(lo) if lo else fallback_lo,
+            _parse_t(hi) if hi else fallback_hi)
+
+
+def _team_ready(tid, diso, dur, min_rest, ti, team_busy):
+    """Earliest minute this team could kick off again on `diso`, honouring rest rules."""
+    if tid is None:
+        return 0
+    info = ti.get(tid, {}) or {}
+    eff = max(min_rest, dur) if info.get("no_back_to_back") else min_rest
+    ready = 0
+    for (d, s, e) in team_busy.get(tid, []):
+        if d == diso:
+            ready = max(ready, e + eff)
+    return ready
+
+
 def _fits(blocks, t, block_len):
     for (s, e) in blocks:
         if t < e and s < t + block_len:
@@ -767,11 +799,139 @@ def _suggestions(reasons, items, grounds, tour_dates):
         out.append("Later knockout rounds need earlier rounds finished first — add days or grounds so feeder matches complete in time.")
     if reasons.get("grounds_missing"):
         out.append("Reassign grounds to the affected categories — the grounds they were restricted to have been deleted.")
+    if reasons.get("knockout_window"):
+        out.append("Move the knockout start date earlier, or add days after it, so the bracket has room.")
     if reasons.get("rest_or_b2b"):
         out.append("Reduce minimum rest, or turn off 'no back-to-back' for some teams.")
     if not out:
         out.append("Extend the tournament date range, add grounds, or relax time/rest constraints.")
     return out
+
+
+def _playable_days(tid, ti, dates, cat_unavail):
+    """Dates this team may actually play on, after its own rules and the category's."""
+    info = ti.get(tid, {}) or {}
+    avail = info.get("available_dates") or []
+    unavail = set(info.get("unavailable_dates") or [])
+    pref = info.get("day_preference") or "any"
+    out = []
+    for d in dates:
+        iso = d.isoformat()
+        if iso in cat_unavail or iso in unavail:
+            continue
+        if avail and iso not in avail:
+            continue
+        weekend = d.weekday() >= 5
+        if pref == "weekend" and not weekend:
+            continue
+        if pref == "weekday" and weekend:
+            continue
+        out.append(iso)
+    return out
+
+
+def analyse_capacity(items, grounds, tour_dates):
+    """Work out *before* scheduling whether the requested fixtures can physically fit.
+
+    Catches the common configuration trap where no amount of grounds or hours can help —
+    e.g. a team allowed one match a day, available two days, but needing four matches.
+    Returns (conflicts, suggestions, blocked_cat_ids); messages state the arithmetic
+    plainly so the organizer can see exactly which setting to change.
+    """
+    conflicts, suggestions, blocked = [], [], set()
+    gmap = {g["id"]: g for g in grounds}
+
+    for it in items:
+        c = it["constraints"]
+        ti = it["team_info"]
+        name = it.get("cat_name") or "A category"
+        matches = [m for m in it["matches"] + it.get("locked", [])
+                   if m.get("home_id") and m.get("away_id")]
+        if not matches:
+            continue
+        cat_unavail = set(c.get("unavailable_dates", []))
+        dates = [d for d in tour_dates if d.isoformat() not in cat_unavail]
+        max_cat_day = int(c.get("max_matches_per_day", 0) or 0)
+
+        # ---- per-team arithmetic -------------------------------------------------
+        need = defaultdict(int)
+        for m in matches:
+            need[m["home_id"]] += 1
+            need[m["away_id"]] += 1
+        worst = []
+        for tid, required in need.items():
+            days = _playable_days(tid, ti, dates, cat_unavail)
+            per_day = (ti.get(tid, {}) or {}).get("max_matches_per_day")
+            cap = len(days) * int(per_day) if per_day else None   # None = only limited by time
+            if cap is not None and required > cap:
+                worst.append((_team_name(tid, ti), required, cap, len(days), int(per_day)))
+            elif not days:
+                worst.append((_team_name(tid, ti), required, 0, 0, per_day or 0))
+        if worst:
+            blocked.add(it["cat_id"])
+            worst.sort(key=lambda x: x[1] - x[2], reverse=True)
+            for nm, required, cap, ndays, per_day in worst[:3]:
+                if ndays == 0:
+                    conflicts.append({"type": "impossible_config", "severity": "error",
+                        "message": f"{name}: {nm} has no day it is allowed to play on — its "
+                                   "availability rules rule out every tournament date."})
+                else:
+                    conflicts.append({"type": "impossible_config", "severity": "error",
+                        "message": f"{name}: {nm} has {required} match(es) to play but can play at "
+                                   f"most {cap} — {per_day} per day across the {ndays} day(s) it is "
+                                   "available. No number of grounds or extra hours can fix this."})
+            if len(worst) > 3:
+                conflicts.append({"type": "impossible_config", "severity": "error",
+                    "message": f"{name}: {len(worst) - 3} more team(s) are limited the same way."})
+            suggestions.append(
+                f"{name}: raise 'max matches/day' for the affected teams, widen their available "
+                "dates or day preference, or use a format with fewer matches.")
+
+        # ---- whole-category ceiling ---------------------------------------------
+        caps = []
+        for tid in need:
+            days = _playable_days(tid, ti, dates, cat_unavail)
+            per_day = (ti.get(tid, {}) or {}).get("max_matches_per_day")
+            caps.append(len(days) * int(per_day) if per_day else len(days) * 99)
+        ceiling = sum(caps) // 2
+        if ceiling < len(matches):
+            blocked.add(it["cat_id"])
+            conflicts.append({"type": "impossible_config", "severity": "error",
+                "message": f"{name} needs {len(matches)} matches, but its teams can play at most "
+                           f"{ceiling} between them under the current per-day limits and available "
+                           "days. Only that many can be scheduled."})
+        if max_cat_day and max_cat_day * len(dates) < len(matches):
+            blocked.add(it["cat_id"])
+            conflicts.append({"type": "impossible_config", "severity": "error",
+                "message": f"{name} allows {max_cat_day} match(es) per day over {len(dates)} day(s) "
+                           f"= {max_cat_day * len(dates)}, but has {len(matches)} to play."})
+            suggestions.append(f"{name}: raise the category's 'max matches/day' or add playing days.")
+
+    # ---- shared ground time across the whole tournament --------------------------
+    total_need, detail = 0, []
+    for it in items:
+        c = it["constraints"]
+        n = len([m for m in it["matches"] if m.get("home_id") and m.get("away_id")])
+        block = int(c.get("match_duration_minutes", 90)) + int(c.get("slot_gap_minutes", 0))
+        total_need += n * block
+        detail.append((it.get("cat_name"), n, block))
+    supply = 0
+    for d in tour_dates:
+        diso = d.isoformat()
+        for g in grounds:
+            gw = ground_window(g, diso, 0, 24 * 60)
+            if gw is None:
+                continue
+            lo, hi = gw
+            supply += max(0, hi - lo)
+    if total_need > supply and supply:
+        conflicts.append({"type": "capacity", "severity": "error",
+            "message": f"All categories together need about {total_need // 60} hours of pitch time, "
+                       f"but the {len(grounds)} ground(s) offer about {supply // 60} hours across "
+                       f"{len(tour_dates)} day(s). Roughly {(total_need - supply) // 60} hours short."})
+        suggestions.append("Add grounds or days, shorten matches, or reduce the gap between matches "
+                           "— the tournament needs more pitch time than exists.")
+    return conflicts, suggestions, blocked
 
 
 def schedule_matches(items, grounds, tour_dates):
@@ -801,17 +961,21 @@ def schedule_matches(items, grounds, tour_dates):
 
     reverse_feed, group_by_cat = _feeder_map(items)
 
+    # Pre-flight: diagnose configurations that cannot fit whatever the scheduler does,
+    # so the organizer gets arithmetic ("needs 10, can host 5") instead of a pile of
+    # per-match rejections that all point at the same underlying setting.
+    pre_conflicts, pre_suggestions, blocked_cats = analyse_capacity(items, grounds, tour_dates)
+
     # A category explicitly restricted to grounds that no longer exist must fail
     # loudly instead of silently spilling onto every ground.
-    pre_conflicts = []
     dead_cats = set()
     for it in items:
         _gids = it.get("ground_ids") or []
         if _gids and not any(g in gmap for g in _gids):
             dead_cats.add(it["cat_id"])
             pre_conflicts.append({"type": "no_grounds", "severity": "error",
-                "message": "A category is restricted to ground(s) that no longer exist — "
-                           "reassign its grounds (Schedule tab) before scheduling."})
+                "message": f"{it.get('cat_name') or 'A category'} is restricted to ground(s) that no "
+                           "longer exist — reassign its grounds on the Schedule tab."})
 
     # Pre-book locked/already-placed matches so the scheduler works around them.
     for it in items:
@@ -856,13 +1020,13 @@ def schedule_matches(items, grounds, tour_dates):
         dur = int(c.get("match_duration_minutes", 90))
         buf = int(c.get("slot_gap_minutes", 0))
         block = dur + buf
-        cat_lo = _parse_t(c.get("earliest_time", "08:00"))
-        cat_hi = _parse_t(c.get("latest_time", "20:00"))
         min_rest = int(c.get("min_rest_minutes", 0))
         max_cat_day = int(c.get("max_matches_per_day", 0))
         cat_unavail = set(c.get("unavailable_dates", []))
         bstart = c.get("break_start"); bend = c.get("break_end")
         brk = (_parse_t(bstart), _parse_t(bend)) if bstart and bend else None
+        ko_start = c.get("knockout_start_date") or None
+        ko_time = c.get("knockout_earliest_time") or None
         gids = it.get("ground_ids") or list(gmap.keys())
         cat_grounds = [gmap[g] for g in gids if g in gmap] or grounds
         cat_grounds = sorted(cat_grounds, key=lambda x: x.get("priority", 1))
@@ -885,13 +1049,21 @@ def schedule_matches(items, grounds, tour_dates):
 
         reasons = defaultdict(int)
         placed = False
-        for dobj in tour_dates:
+        # Everything is scheduled as early as it can be, except a Final: a final should
+        # close the event, so it looks for the LATEST day it can be held on and works
+        # backwards from there.
+        day_order = list(reversed(tour_dates)) if is_final else tour_dates
+        for dobj in day_order:
             diso = dobj.isoformat()
             di = date_index[diso]
             if di < bound_di:
                 reasons["dependency"] += 1
                 continue
             if diso in cat_unavail:
+                continue
+            # Organizer-declared knockout window (e.g. "finals day is the Sunday").
+            if m.get("stage") == "knockout" and ko_start and diso < ko_start:
+                reasons["knockout_window"] += 1
                 continue
             if max_cat_day and cat_day[(it["cat_id"], diso)] >= max_cat_day:
                 reasons["cat_day_full"] += 1
@@ -904,17 +1076,45 @@ def schedule_matches(items, grounds, tour_dates):
                 continue
 
             day_floor = bound_end if di == bound_di else 0
+            if m.get("stage") == "knockout" and ko_time:
+                day_floor = max(day_floor, _parse_t(ko_time))
+            # Playing hours can differ per date (e.g. Friday evening only).
+            cat_lo, cat_hi = day_window(c, diso)
+            team_ready_home = _team_ready(home, diso, dur, min_rest, ti, team_busy)
+            team_ready_away = _team_ready(away, diso, dur, min_rest, ti, team_busy)
             candidates = []  # (cost, ground, t)
             for g in cat_grounds:
-                lo = max(cat_lo, _parse_t(g.get("open_time") or _fmt_t(cat_lo)),
-                         _t_from(home, ti), _t_from(away, ti), day_floor)
-                hi = min(cat_hi, _parse_t(g.get("close_time") or _fmt_t(cat_hi)),
-                         _t_to(home, ti), _t_to(away, ti))
+                gw = ground_window(g, diso, cat_lo, cat_hi)
+                if gw is None:          # ground closed on this date
+                    reasons["grounds_busy"] += 1
+                    continue
+                g_lo, g_hi = gw
+                lo = max(cat_lo, g_lo, _t_from(home, ti), _t_from(away, ti), day_floor)
+                hi = min(cat_hi, g_hi, _t_to(home, ti), _t_to(away, ti))
                 if lo + dur > hi:
                     reasons["window_too_tight"] += 1
                     continue
                 blocks = ground_blocks[(g["id"], diso)]
-                edges = sorted(set([lo] + ([brk[1]] if brk else []) + [e for (s, e) in blocks if e >= lo]))
+                # Candidate kick-off times: a regular grid, the end of each match already on
+                # this ground, the end of the protected break, the latest possible start, and
+                # the moment each of these two teams becomes free elsewhere. That last set
+                # matters — without it an idle ground offers only its opening time, so a
+                # resting team's match cannot be placed there and everything piles onto one
+                # ground. All of it is clamped to [lo, hi - dur] so a stale edge can never
+                # sneak a match in outside the allowed hours.
+                grid, t_ = [], lo
+                while t_ + dur <= hi and len(grid) < 48:
+                    grid.append(t_)
+                    t_ += block
+                edges = sorted({
+                    t for t in (
+                        [lo, hi - dur]
+                        + ([brk[1]] if brk else [])
+                        + [e for (s, e) in blocks]
+                        + [team_ready_home, team_ready_away]
+                        + grid
+                    ) if lo <= t <= hi - dur
+                })
                 found_on_ground = False
                 for t in edges:
                     if t + dur > hi:
@@ -995,8 +1195,20 @@ def schedule_matches(items, grounds, tour_dates):
             for k, v in (m.get("_fail_reasons") or {}).items():
                 agg[k] += v
         uniq.insert(0, {"type": "capacity", "severity": "error",
-            "message": f"{len(unscheduled)} match(es) could not be placed within the available days, grounds and constraints. See details and suggestions below."})
-        for m in unscheduled[:8]:
+            "message": f"{len(unscheduled)} match(es) could not be placed. The reasons below explain "
+                       "what is limiting them and what to change."})
+        # Categories already explained by the capacity analysis don't need a message per
+        # match as well — that just buries the real answer.
+        cat_of = {}
+        for it in items:
+            for m in it["matches"]:
+                cat_of[id(m)] = it["cat_id"]
+        detailed = [m for m in unscheduled if cat_of.get(id(m)) not in blocked_cats]
+        skipped = len(unscheduled) - len(detailed)
+        if skipped:
+            uniq.append({"type": "capacity", "severity": "error",
+                "message": f"{skipped} of those are in categories whose limits are explained above."})
+        for m in detailed[:6]:
             reasons = m.get("_fail_reasons") or {}
             dominant = max(reasons, key=reasons.get) if reasons else None
             why = {
@@ -1008,11 +1220,19 @@ def schedule_matches(items, grounds, tour_dates):
                 "rest_or_b2b": "rest / no-back-to-back rules blocked every open slot",
                 "dependency": "the earlier rounds it depends on could not finish in time",
                 "grounds_missing": "its category is restricted to grounds that no longer exist",
+                "knockout_window": "the knockout stage cannot start before the date you set for it",
             }.get(dominant, "no valid slot satisfied all constraints")
             uniq.append({"type": "unplaced_match", "severity": "error",
                 "message": f"{m.get('_desc', 'A match')} could not be scheduled — {why}."})
+        for m in unscheduled:
             m.pop("_fail_reasons", None); m.pop("_desc", None)
         suggestions = _suggestions(agg, items, grounds, tour_dates)
 
+    # Configuration-level findings lead: they name the setting to change.
+    if pre_conflicts:
+        uniq = pre_conflicts + [c for c in uniq if c not in pre_conflicts]
+    seen_s = set()
+    suggestions = [s for s in (pre_suggestions + suggestions)
+                   if not (s in seen_s or seen_s.add(s))]
     return scheduled, unscheduled, uniq, suggestions
 

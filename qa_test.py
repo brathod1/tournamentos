@@ -235,6 +235,9 @@ def phase_build():
     g[3] = mk_ground(tid, "3", "08:00", "18:00", False, 2)
     g[4] = mk_ground(tid, "4", "10:00", "22:00", True, 2)
     g[5] = mk_ground(tid, "5", "08:00", "16:00", False, 3)
+    # Ground 3 is unavailable on the Sunday; Ground 2 opens late on the Saturday.
+    api("PUT", f"/grounds/{g[3]}", json={"date_hours": {"2026-09-06": {"closed": True}}})
+    api("PUT", f"/grounds/{g[2]}", json={"date_hours": {"2026-09-05": {"open": "18:00", "close": "22:00"}}})
     GC["g"] = g
     check(sec, "5 grounds created", len(jget(f"/tournaments/{tid}/grounds")) == 5)
 
@@ -252,6 +255,8 @@ def phase_build():
         "match_duration_minutes": 60, "slot_gap_minutes": 15,
         "min_rest_minutes": 60, "max_matches_per_day": 0,
         "break_start": "12:30", "break_end": "14:00",
+        # Sat 5 Sep is an evening-only session; Sun 6 Sep uses the default window.
+        "date_windows": {"2026-09-05": {"earliest": "16:00", "latest": "22:00"}},
     }, ground_ids=[g[1], g[2], g[3]])
     GC["u13"] = u13
     u13_names = ["Ahmedabad United", "Baroda FC", "Surat Strikers", "Gandhinagar City",
@@ -518,13 +523,22 @@ def phase_schedule():
             viol_allowed.append((m["id"], c["name"], g["name"]))
         s = parse_t(m["time"]); e = s + dur
         cons = c.get("constraints") or {}
-        lo = parse_t(cons.get("earliest_time", "08:00")); hi = parse_t(cons.get("latest_time", "20:00"))
-        gl = parse_t(g["open_time"]) if g.get("open_time") else 0
-        gh = parse_t(g["close_time"]) if g.get("close_time") else 24 * 60
+        # per-date window overrides the category default
+        dw = (cons.get("date_windows") or {}).get(m["date"]) or {}
+        lo = parse_t(dw.get("earliest") or cons.get("earliest_time", "08:00"))
+        hi = parse_t(dw.get("latest") or cons.get("latest_time", "20:00"))
+        # per-date ground hours override the ground default
+        gdh = (g.get("date_hours") or {}).get(m["date"]) or {}
+        if gdh.get("closed"):
+            viol_ground.append((m["id"], g["name"], m["date"], "ground closed that day"))
+        g_open = gdh.get("open") or g.get("open_time")
+        g_close = gdh.get("close") or g.get("close_time")
+        gl = parse_t(g_open) if g_open else 0
+        gh = parse_t(g_close) if g_close else 24 * 60
         if s < lo or e > hi:
-            viol_window.append((m["id"], c["name"], m["time"], "category window"))
+            viol_window.append((m["id"], c["name"], m["time"], m["date"], "category window"))
         if s < gl or e > gh:
-            viol_window.append((m["id"], g["name"], m["time"], "ground hours"))
+            viol_window.append((m["id"], g["name"], m["time"], m["date"], "ground hours"))
         bs, be = cons.get("break_start"), cons.get("break_end")
         if bs and be and s < parse_t(be) and parse_t(bs) < e:
             viol_break.append((m["id"], c["name"], m["time"]))
@@ -534,10 +548,29 @@ def phase_schedule():
         for i in range(len(lst) - 1):
             if lst[i + 1][0] < lst[i][1]:
                 viol_ground.append((key, lst[i][2], lst[i + 1][2]))
-    check(sec, "no ground double-booking (cross-category)", not viol_ground, viol_ground[:5])
+    check(sec, "no ground double-booking / closed-day use", not viol_ground, viol_ground[:5])
     check(sec, "grounds allowed for category", not viol_allowed, viol_allowed[:5])
-    check(sec, "within category window AND ground hours", not viol_window, viol_window[:5])
+    check(sec, "within category window AND ground hours (per-date aware)", not viol_window, viol_window[:5])
     check(sec, "protected break respected", not viol_break, viol_break[:5])
+
+    # --- per-date windows actually took effect ---
+    sec_d = "3-date-windows"
+    u13_placed = [(m, c, d) for m, c, d in placed if c["id"] == GC["u13"]]
+    sat = [m for m, c, d in u13_placed if m["date"] == "2026-09-05"]
+    sun = [m for m, c, d in u13_placed if m["date"] == "2026-09-06"]
+    check(sec_d, "Saturday U-13 matches all start at/after the 16:00 evening window",
+          all(parse_t(m["time"]) >= 16 * 60 for m in sat),
+          [(m["time"]) for m in sat if parse_t(m["time"]) < 16 * 60][:5])
+    info(sec_d, "evening-only Saturday", f"{len(sat)} match(es), earliest {min([m['time'] for m in sat], default='-')}")
+    check(sec_d, "Sunday U-13 matches use the default 08:00-18:00 window",
+          all(8 * 60 <= parse_t(m["time"]) and parse_t(m["time"]) + 60 <= 18 * 60 for m in sun),
+          [(m["time"]) for m in sun][:5])
+    on_closed = [m["id"] for m, c, d in placed if m["date"] == "2026-09-06" and m["ground_id"] == GC["g"][3]]
+    check(sec_d, "nothing scheduled on a ground marked closed for that date", not on_closed, on_closed[:5])
+    g2_sat = [m for m, c, d in placed if m["date"] == "2026-09-05" and m["ground_id"] == GC["g"][2]]
+    check(sec_d, "ground with late Saturday opening respected (18:00+)",
+          all(parse_t(m["time"]) >= 18 * 60 for m in g2_sat),
+          [m["time"] for m in g2_sat if parse_t(m["time"]) < 18 * 60][:5])
 
     # team checks
     team_sched = defaultdict(list)   # tid -> (date, s, e, cat)

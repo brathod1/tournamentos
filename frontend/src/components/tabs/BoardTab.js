@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "../../lib/api";
-import { SectionTitle, Empty, Overline, groundLabel } from "../bits";
+import { SectionTitle, Empty, Overline, groundLabel, Labeled } from "../bits";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../ui/dialog";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { LayoutGrid, AlertTriangle, CheckCircle2, Coffee, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
@@ -10,6 +14,19 @@ const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 
 const fmt12 = (m) => { let h = Math.floor(m / 60); const mm = String(m % 60).padStart(2, "0"); const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12; return `${h}:${mm}${ap}`; };
 const parse = (s) => { const [a, b] = s.split(":"); return +a * 60 + +b; };
 const PALETTE = ["#a3e635", "#38bdf8", "#f472b6", "#fbbf24", "#c084fc", "#34d399", "#fb7185", "#22d3ee"];
+
+/** Every date in [start, end] inclusive, as YYYY-MM-DD. */
+const datesBetween = (start, end) => {
+  if (!start) return [];
+  const out = [];
+  const d = new Date(`${start}T00:00:00`);
+  const last = new Date(`${end || start}T00:00:00`);
+  while (d <= last && out.length < 120) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+};
 
 export default function BoardTab({ tid, categories }) {
   const { canEdit } = useAuth();
@@ -21,6 +38,8 @@ export default function BoardTab({ tid, categories }) {
   const [dates, setDates] = useState([]);
   const [conflicts, setConflicts] = useState([]);
   const [drag, setDrag] = useState(null);
+  const [tour, setTour] = useState(null);
+  const [editing, setEditing] = useState(null);   // match being moved via the dialog
 
   const colorFor = useCallback((cid) => PALETTE[Math.max(0, categories.findIndex((c) => c.id === cid)) % PALETTE.length], [categories]);
   const catName = useCallback((cid) => categories.find((c) => c.id === cid)?.name || "—", [categories]);
@@ -38,6 +57,8 @@ export default function BoardTab({ tid, categories }) {
   const load = useCallback(async () => {
     const g = await api.listGrounds(tid);
     setGrounds(g);
+    const t0 = await api.getTournament(tid).catch(() => null);
+    setTour(t0);
     const sched = await api.schedule(tid);
     const nm = {}; g.forEach((x) => (nm[x.id] = groundLabel(x.name)));
     (await api.listReferees(tid)).forEach((r) => (nm[r.id] = r.name));
@@ -47,7 +68,10 @@ export default function BoardTab({ tid, categories }) {
       dmap[c.id] = (c.constraints && c.constraints.match_duration_minutes) || 90;
     }
     setNames(nm); setDurs(dmap); setMatches(sched);
-    const ds = [...new Set(sched.map((m) => m.date))].filter(Boolean).sort();
+    // Show every tournament day, not just the ones that already have matches —
+    // otherwise there is nowhere to move a match to.
+    const withMatches = [...new Set(sched.map((m) => m.date))].filter(Boolean);
+    const ds = [...new Set([...withMatches, ...datesBetween(t0?.start_date, t0?.end_date)])].sort();
     setDates(ds);
     setDate((d) => (d && ds.includes(d) ? d : ds[0] || ""));
     const cf = await api.tournamentConflicts(tid).catch(() => ({ conflicts: [] }));
@@ -102,6 +126,21 @@ export default function BoardTab({ tid, categories }) {
     }
     await load();
   };
+
+  // Dropping a card onto another day's tab moves it to that date, keeping its
+  // ground and kick-off time.
+  const onDropDay = async (targetDate) => {
+    if (!drag || !canEdit || targetDate === date) return;
+    const id = drag; setDrag(null);
+    try {
+      await api.updateMatch(id, { date: targetDate });
+      toast.success(`Moved to ${targetDate}`);
+      setDate(targetDate);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not move match");
+    }
+    await load();
+  };
   // Calendar-style lane layout: exact positions, side-by-side lanes only when matches truly overlap.
   const laneLayout = (gid) => {
     const evs = dayMatches.filter((m) => m.ground_id === gid)
@@ -133,7 +172,10 @@ export default function BoardTab({ tid, categories }) {
         <div className="flex gap-2 flex-wrap justify-end">
           {dates.map((d) => (
             <button key={d} data-testid={`board-date-${d}`} onClick={() => setDate(d)}
-              className={`px-3 py-2 text-xs uppercase tracking-wider border rounded-none transition-colors ${date === d ? "border-lime-400 text-lime-400 bg-lime-400/10" : "border-zinc-800 text-zinc-400 hover:border-zinc-600"}`}>
+              onDragOver={(e) => { if (drag && d !== date) e.preventDefault(); }}
+              onDrop={() => onDropDay(d)}
+              title={drag ? `Drop here to move this match to ${d}` : undefined}
+              className={`px-3 py-2 text-xs uppercase tracking-wider border rounded-none transition-colors ${date === d ? "border-lime-400 text-lime-400 bg-lime-400/10" : drag ? "border-lime-400/50 text-lime-300 border-dashed" : "border-zinc-800 text-zinc-400 hover:border-zinc-600"}`}>
               {new Date(d).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
             </button>
           ))}
@@ -149,7 +191,7 @@ export default function BoardTab({ tid, categories }) {
         ))}
         <span className="flex items-center gap-2 text-xs text-red-300"><span className="w-3 h-3 border-2 border-red-500 bg-red-500/20" />Conflict</span>
         <span className="flex items-center gap-2 text-xs text-amber-300"><span className="w-3 h-3 bg-[repeating-linear-gradient(45deg,#f59e0b33,#f59e0b33_3px,transparent_3px,transparent_6px)] border border-amber-500/40" />Break window</span>
-        {canEdit && <span className="flex items-center gap-2 text-xs text-zinc-500"><LayoutGrid className="w-3.5 h-3.5" />Drag a match to any slot</span>}
+        {canEdit && <span className="flex items-center gap-2 text-xs text-zinc-500"><LayoutGrid className="w-3.5 h-3.5" />Drag to a slot or onto another day · click a match to move it exactly</span>}
       </div>
 
       {dates.length === 0 ? (
@@ -187,8 +229,10 @@ export default function BoardTab({ tid, categories }) {
                         return (
                           <div key={m.id} draggable={canEdit && !m.locked}
                             onDragStart={(e) => { if (!canEdit || m.locked) { e.preventDefault(); return; } setDrag(m.id); }}
+                            onDragEnd={() => setDrag(null)}
+                            onClick={() => canEdit && setEditing(m)}
                             data-testid={`board-match-${m.id}`}
-                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.referee_id ? ` · ref ${names[m.referee_id] || "?"}` : ""}${m.locked ? " · locked" : ""}`}
+                            title={`${catName(m.category_id)} · ${m.time} (${dur(m)}m)${m.referee_id ? ` · ref ${names[m.referee_id] || "?"}` : ""}${m.locked ? " · locked" : ""}${canEdit ? " — click to move" : ""}`}
                             style={{
                               position: "absolute",
                               top: ((s - START) / STEP) * ROW_H + 2,
@@ -243,6 +287,104 @@ export default function BoardTab({ tid, categories }) {
           </div>
         </div>
       )}
+
+      <MoveMatchDialog match={editing} dates={dates} grounds={grounds} names={names}
+        catName={catName} onClose={() => setEditing(null)} reload={load} />
     </div>
+  );
+}
+
+/** Precise move: pick a day, time and ground, lock it, or clear the slot entirely.
+ *  Works where dragging doesn't — across days, and on touch screens. */
+function MoveMatchDialog({ match, dates, grounds, names, catName, onClose, reload }) {
+  const [f, setF] = useState({ date: "", time: "", ground_id: "", locked: false });
+  useEffect(() => {
+    if (match) setF({ date: match.date || "", time: match.time || "",
+                      ground_id: match.ground_id || "", locked: !!match.locked });
+  }, [match]);
+  if (!match) return null;
+
+  const save = async (payload, msg) => {
+    try {
+      await api.updateMatch(match.id, payload);
+      toast.success(msg);
+      onClose(); reload();
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not update match"); }
+  };
+
+  const apply = () => {
+    if (!f.date || !f.time || !f.ground_id) return toast.error("Pick a day, time and ground");
+    // A locked match must be unlocked in the same request, otherwise the server
+    // (rightly) refuses to move it.
+    save({ ...(match.locked ? { locked: false } : {}), date: f.date, time: f.time,
+           ground_id: f.ground_id, ...(f.locked ? { locked: true } : {}) }, "Match moved");
+  };
+
+  return (
+    <Dialog open={!!match} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none max-w-lg">
+        <DialogHeader><DialogTitle className="font-display text-2xl uppercase tracking-tight">Move Match</DialogTitle></DialogHeader>
+
+        <div className="text-sm">
+          <div className="font-semibold">{names[match.home_id] || "?"} <span className="text-zinc-500">v</span> {names[match.away_id] || "?"}</div>
+          <div className="text-xs text-zinc-500 mt-1">
+            {catName(match.category_id)}
+            {match.label ? ` · ${match.label}` : match.group ? ` · ${match.group}` : ""}
+            {match.locked && <span className="text-lime-400 ml-2">Locked</span>}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 pt-2">
+          <div className="col-span-2">
+            <Labeled label="Day">
+              <Select value={f.date} onValueChange={(v) => setF({ ...f, date: v })}>
+                <SelectTrigger data-testid="move-date" className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400"><SelectValue placeholder="Pick a day" /></SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none">
+                  {dates.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Labeled>
+          </div>
+          <Labeled label="Kick-off">
+            <Input data-testid="move-time" type="time" value={f.time}
+              onChange={(e) => setF({ ...f, time: e.target.value })}
+              className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400" />
+          </Labeled>
+          <Labeled label="Ground">
+            <Select value={f.ground_id} onValueChange={(v) => setF({ ...f, ground_id: v })}>
+              <SelectTrigger data-testid="move-ground" className="rounded-none bg-zinc-950 border-zinc-800 focus:border-lime-400"><SelectValue placeholder="Pick a ground" /></SelectTrigger>
+              <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-50 rounded-none">
+                {grounds.map((g) => <SelectItem key={g.id} value={g.id}>{groundLabel(g.name)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Labeled>
+          <label className="col-span-2 flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
+            <input type="checkbox" checked={f.locked} onChange={(e) => setF({ ...f, locked: e.target.checked })}
+              className="accent-lime-400" data-testid="move-lock" />
+            Lock this slot so the scheduler leaves it alone
+          </label>
+        </div>
+
+        <p className="text-xs text-zinc-600">
+          Moving a match by hand can create a clash — the board highlights those in red and
+          the conflict panel will explain them.
+        </p>
+
+        <DialogFooter className="gap-2 flex-wrap">
+          <Button onClick={() => save({ ...(match.locked ? { locked: false } : {}), date: null, time: null, ground_id: null },
+                                       "Match returned to the unscheduled list")}
+            className="rounded-none bg-zinc-800 hover:bg-zinc-700 text-zinc-300 uppercase tracking-wider text-xs">
+            Clear slot
+          </Button>
+          <Button onClick={onClose} className="rounded-none bg-zinc-800 hover:bg-zinc-700 text-zinc-100 uppercase tracking-wider">Cancel</Button>
+          <Button data-testid="move-save" onClick={apply}
+            className="rounded-none bg-lime-400 text-black hover:bg-lime-500 font-bold uppercase tracking-wider">Move Match</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

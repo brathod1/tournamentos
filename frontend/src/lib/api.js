@@ -77,8 +77,10 @@ export const api = {
   updateMatch: (id, d) => http.put(`/matches/${id}`, d).then((r) => r.data),
   clearMatches: (cid) => http.delete(`/categories/${cid}/matches`).then((r) => r.data),
   // scheduling
-  autoSchedule: (cid) => http.post(`/categories/${cid}/auto-schedule`).then((r) => r.data),
-  scheduleTournament: (tid) => http.post(`/tournaments/${tid}/auto-schedule`).then((r) => r.data),
+  // replan=false keeps matches that already have a slot (locked or hand-placed) and
+  // only fills the gaps; replan=true rebuilds the whole schedule from scratch.
+  autoSchedule: (cid, replan = false) => http.post(`/categories/${cid}/auto-schedule?replan=${replan}`).then((r) => r.data),
+  scheduleTournament: (tid, replan = false) => http.post(`/tournaments/${tid}/auto-schedule?replan=${replan}`).then((r) => r.data),
   assignReferees: (tid) => http.post(`/tournaments/${tid}/assign-referees`).then((r) => r.data),
   conflicts: (cid) => http.get(`/categories/${cid}/conflicts`).then((r) => r.data),
   tournamentConflicts: (tid) => http.get(`/tournaments/${tid}/conflicts`).then((r) => r.data),
